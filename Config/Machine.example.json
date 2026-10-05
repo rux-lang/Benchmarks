@@ -1,0 +1,9 @@
+{
+  "Label": "Desktop-A",
+  "Overrides": {
+    "MemorySpeedMTs": null,
+    "PowerPolicy": null
+  },
+  "Notes": "Record cooling, AC/battery status, BIOS changes, and chosen P/E core here."
+}
+

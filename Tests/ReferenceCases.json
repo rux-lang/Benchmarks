@@ -1,0 +1,95 @@
+{
+  "SchemaVersion": 1,
+  "Description": "Independent dot products, direct DFT, per-body force accumulation, complex iteration, and trial division. Inputs and formulas are documented in Docs/Methodology.md.",
+  "Cases": [
+    {
+      "Benchmark": "FastFourierTransform",
+      "Size": 2,
+      "Work": 1,
+      "Seed": 8,
+      "Sum": 0,
+      "Weighted": -0.125
+    },
+    {
+      "Benchmark": "MatrixMultiply",
+      "Size": 4,
+      "Work": 1,
+      "Seed": 1,
+      "Sum": 2.5625,
+      "Weighted": 10.421875
+    },
+    {
+      "Benchmark": "MatrixMultiply",
+      "Size": 32,
+      "Work": 1,
+      "Seed": 1,
+      "Sum": -0.03125,
+      "Weighted": -43.5
+    },
+    {
+      "Benchmark": "FastFourierTransform",
+      "Size": 4,
+      "Work": 1,
+      "Seed": 1,
+      "Sum": -3.5,
+      "Weighted": -5.499999999999999
+    },
+    {
+      "Benchmark": "FastFourierTransform",
+      "Size": 1024,
+      "Work": 1,
+      "Seed": 1,
+      "Sum": -896.0000000001162,
+      "Weighted": -4283.097765505992
+    },
+    {
+      "Benchmark": "NBody",
+      "Size": 2,
+      "Work": 1,
+      "Seed": 1,
+      "Sum": -70.998046875,
+      "Weighted": -105.99904117576635
+    },
+    {
+      "Benchmark": "NBody",
+      "Size": 32,
+      "Work": 2,
+      "Seed": 1,
+      "Sum": -879.96875,
+      "Weighted": -3349.8832600448063
+    },
+    {
+      "Benchmark": "Mandelbrot",
+      "Size": 4,
+      "Work": 20,
+      "Seed": 1,
+      "Sum": 182,
+      "Weighted": 598
+    },
+    {
+      "Benchmark": "Mandelbrot",
+      "Size": 64,
+      "Work": 100,
+      "Seed": 1,
+      "Sum": 125613,
+      "Weighted": 504215
+    },
+    {
+      "Benchmark": "PrimeSieve",
+      "Size": 10,
+      "Work": 1,
+      "Seed": 1,
+      "Sum": 4,
+      "Weighted": 17
+    },
+    {
+      "Benchmark": "PrimeSieve",
+      "Size": 10000,
+      "Work": 1,
+      "Seed": 1,
+      "Sum": 1229,
+      "Weighted": 5736396
+    }
+  ]
+}
+

@@ -1,0 +1,51 @@
+import Core::Panic;
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::Array;
+import Math::{ Cos, Sin, Sqrt };
+import Time::Instant;
+
+const BenchmarkName: char8[..] = "NBody";
+const MaxSize: int = 8192;
+const PowerOfTwo: bool = false;
+
+func RunOnce(p: Parameters) -> Measurement {
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    let n = p.size;
+    var xOwner = Array::Filled<float64>(allocator, n as uint, 0.0) catch { else => Panic("Allocation failed") };
+    var yOwner = Array::Filled<float64>(allocator, n as uint, 0.0) catch { else => Panic("Allocation failed") };
+    var zOwner = Array::Filled<float64>(allocator, n as uint, 0.0) catch { else => Panic("Allocation failed") };
+    var vxOwner = Array::Filled<float64>(allocator, n as uint, 0.0) catch { else => Panic("Allocation failed") };
+    var vyOwner = Array::Filled<float64>(allocator, n as uint, 0.0) catch { else => Panic("Allocation failed") };
+    var vzOwner = Array::Filled<float64>(allocator, n as uint, 0.0) catch { else => Panic("Allocation failed") };
+    let x = xOwner.AsMutableSlice(); let y = yOwner.AsMutableSlice(); let z = zOwner.AsMutableSlice();
+    let vx = vxOwner.AsMutableSlice(); let vy = vyOwner.AsMutableSlice(); let vz = vzOwner.AsMutableSlice();
+    for i in 0..n {
+        x[i] = (i % 16 - 8) as float64 + p.seed as float64 / 1024.0;
+        y[i] = ((i / 16) % 16 - 8) as float64; z[i] = (i / 256 - 4) as float64;
+    }
+    let start = Instant::Now();
+    for step in 0..p.work {
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let dx = x[j] - x[i]; let dy = y[j] - y[i]; let dz = z[j] - z[i];
+                let distance = dx * dx + dy * dy + dz * dz + 0.01;
+                let inverse = 1.0 / Sqrt(distance);
+                let scale = 0.001 * inverse * inverse * inverse / n as float64;
+                vx[i] += dx * scale; vy[i] += dy * scale; vz[i] += dz * scale;
+                vx[j] -= dx * scale; vy[j] -= dy * scale; vz[j] -= dz * scale;
+            }
+        }
+        for i in 0..n {
+            x[i] += 0.001 * vx[i]; y[i] += 0.001 * vy[i]; z[i] += 0.001 * vz[i];
+        }
+    }
+    let seconds = (start.Elapsed().TotalNanoseconds() ?? 0) as float64 / 1000000000.0;
+    var sum = 0.0; var weighted = 0.0;
+    for i in 0..n {
+        let value = x[i] + 2.0 * y[i] + 3.0 * z[i] + 4.0 * vx[i] + 5.0 * vy[i] + 6.0 * vz[i];
+        sum += value; weighted += value * (i % 7 + 1) as float64;
+    }
+    return Measurement { seconds: seconds, sum: sum, weighted: weighted };
+}
+

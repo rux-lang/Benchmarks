@@ -1,0 +1,13 @@
+[package]
+name = "matrix-multiply"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[profile.release]
+opt-level = 3
+debug = false
+strip = "symbols"
+incremental = false
+lto = false
+

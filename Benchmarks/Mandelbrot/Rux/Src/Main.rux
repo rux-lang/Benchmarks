@@ -1,0 +1,35 @@
+import Core::Panic;
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::Array;
+import Math::{ Cos, Sin, Sqrt };
+import Time::Instant;
+
+const BenchmarkName: char8[..] = "Mandelbrot";
+const MaxSize: int = 4096;
+const PowerOfTwo: bool = false;
+
+func RunOnce(p: Parameters) -> Measurement {
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    let n = p.size;
+    var owner = Array::Filled<int32>(allocator, (n * n) as uint, 0i32) catch { else => Panic("Allocation failed") };
+    let counts = owner.AsMutableSlice();
+    let start = Instant::Now();
+    for y in 0..n {
+        for x in 0..n {
+            let cr = 3.0 * x as float64 / n as float64 - 2.0;
+            let ci = 2.0 * y as float64 / n as float64 - 1.0;
+            var zr = 0.0; var zi = 0.0; var count: int32 = 0;
+            while zr * zr + zi * zi <= 4.0 && count as int < p.work {
+                let next = zr * zr - zi * zi + cr;
+                zi = 2.0 * zr * zi + ci; zr = next; count += 1;
+            }
+            counts[y * n + x] = count;
+        }
+    }
+    let seconds = (start.Elapsed().TotalNanoseconds() ?? 0) as float64 / 1000000000.0;
+    var sum: int64 = 0; var weighted: int64 = 0;
+    for i in 0..(n * n) { sum += counts[i] as int64; weighted += counts[i] as int64 * (i % 7 + 1) as int64; }
+    return Measurement { seconds: seconds, sum: sum as float64, weighted: weighted as float64 };
+}
+
