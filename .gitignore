@@ -1,8 +1,14 @@
-Build/
+# Build outputs of the apps
+Apps/**/Bin/
+Apps/**/Temp/
+Apps/**/target/
+Apps/**/build/
+Apps/**/.artifacts/
+Apps/**/*.ppm
+
+# Runner build output
+Runner/bin/
+Runner/obj/
+
+# Measurement results
 Results/
-Machine.local.json
-**/target/
-**/bin/
-**/obj/
-**/Bin/
-**/.cache/

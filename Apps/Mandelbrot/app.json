@@ -1,0 +1,21 @@
+{
+  "name": "Mandelbrot",
+  "description": "Mandelbrot set rendered to a PPM image file (floating point, file output)",
+  "outputFile": "Mandelbrot.ppm",
+  "profiles": {
+    "small": {
+      "args": [
+        "200",
+        "100"
+      ],
+      "expected": "200x200 97881dfd586c2e76"
+    },
+    "standard": {
+      "args": [
+        "2000",
+        "500"
+      ],
+      "expected": "2000x2000 e16e606089350740"
+    }
+  }
+}

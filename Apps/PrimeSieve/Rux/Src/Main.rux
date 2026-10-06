@@ -1,0 +1,35 @@
+// PrimeSieve: finds every prime up to n with the sieve of Eratosthenes over a byte array and prints
+// how many there are and their sum.
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::{ Array, CollectionError };
+import Io::PrintLine;
+
+func Main() -> ! CollectionError {
+    let limit = IntArgument(0, 100000000) as uint;
+
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    var compositeOwner = Array::Filled<uint8>(allocator, limit + 1, 0u8)?;
+    let composite = compositeOwner.AsMutableSlice();
+    var i: uint = 2;
+    while i * i <= limit {
+        if composite[i] == 0 {
+            var j = i * i;
+            while j <= limit {
+                composite[j] = 1;
+                j += i;
+            }
+        }
+        i += 1;
+    }
+
+    var count: uint64 = 0;
+    var sum: uint64 = 0;
+    for k in 2u..=limit {
+        if composite[k] == 0 {
+            count += 1;
+            sum += k as uint64;
+        }
+    }
+    PrintLine("{} {}", count, sum);
+}

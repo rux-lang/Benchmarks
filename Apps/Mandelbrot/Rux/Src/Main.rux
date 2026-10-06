@@ -1,0 +1,83 @@
+// Mandelbrot: renders the Mandelbrot set into a binary PPM image, writes it to Mandelbrot.ppm and
+// prints the image size and the FNV-1a hash of the file contents.
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::{ Array, CollectionError };
+import FileSystem::{ File, OpenOptions };
+import Io::{ IoError, PrintLine, WriteAll };
+import Path::{ OsString, Path };
+import Text::{ StringBuilder, TextError };
+
+// Appends the decimal digits of a non-negative number.
+func AppendNumber(builder: &var StringBuilder, value: int64) -> ! TextError {
+    var digits: char8[20];
+    var count: uint = 0;
+    var rest = value;
+    loop {
+        digits[count] = (48 + rest % 10) as char8;
+        count += 1;
+        rest = rest / 10;
+        if rest == 0 { break; }
+    }
+    while count > 0 {
+        count -= 1;
+        builder.AppendAscii(digits[count])?;
+    }
+}
+
+func Main() -> ! (CollectionError | IoError | TextError) {
+    let size = IntArgument(0, 2000);
+    let maxIterations = IntArgument(1, 500);
+
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+
+    var header = StringBuilder(allocator);
+    header.Append("P6\n")?;
+    AppendNumber(header, size)?;
+    header.Append(" ")?;
+    AppendNumber(header, size)?;
+    header.Append("\n255\n")?;
+    let headerBytes = header.Bytes();
+
+    var imageOwner = Array::Filled<char8>(allocator, headerBytes.length + (3 * size * size) as uint, 0 as char8)?;
+    let image = imageOwner.AsMutableSlice();
+    for i in 0u..headerBytes.length {
+        image[i] = headerBytes[i];
+    }
+
+    var offset = headerBytes.length;
+    for py in 0..size {
+        let ci = 3.0 * (py as float64) / (size as float64) - 1.5;
+        for px in 0..size {
+            let cr = 3.0 * (px as float64) / (size as float64) - 2.0;
+            var zr = 0.0;
+            var zi = 0.0;
+            var iteration: int64 = 0;
+            while iteration < maxIterations {
+                let zr2 = zr * zr;
+                let zi2 = zi * zi;
+                if zr2 + zi2 > 4.0 { break; }
+                zi = 2.0 * zr * zi + ci;
+                zr = zr2 - zi2 + cr;
+                iteration += 1;
+            }
+            if iteration < maxIterations {
+                image[offset] = (iteration * 7) as uint8 as char8;
+                image[offset + 1] = (iteration * 13) as uint8 as char8;
+                image[offset + 2] = (iteration * 29) as uint8 as char8;
+            }
+            offset += 3;
+        }
+    }
+
+    var holder = OsString::FromText(allocator, "Mandelbrot.ppm")?;
+    var file = File::Open(allocator, Path::FromView(holder.View()), OpenOptions::Writing())?;
+    WriteAll(file, image)?;
+    file.Close()?;
+
+    var hash: uint64 = 0xCBF29CE484222325u64;
+    for b in image {
+        hash = (hash ^ (b as uint8 as uint64)) * 0x100000001B3u64;
+    }
+    PrintLine("{}x{} {:016x}", size, size, hash);
+}

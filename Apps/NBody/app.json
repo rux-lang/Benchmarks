@@ -1,0 +1,19 @@
+{
+  "name": "NBody",
+  "description": "Five-body planetary simulation (floating point, square root)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "1000"
+      ],
+      "expected": "bfc5a441459acc23 bfc5a4a9a3521fa9"
+    },
+    "standard": {
+      "args": [
+        "5000000"
+      ],
+      "expected": "bfc5a441459acc23 bfc5a484215f4db6"
+    }
+  }
+}

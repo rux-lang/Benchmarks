@@ -1,0 +1,44 @@
+// MatrixMultiply: multiplies two generated n×n matrices of doubles with the cache-friendly i-k-j
+// loop order and prints a hash of the result's bit patterns.
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::{ Array, CollectionError };
+import Io::PrintLine;
+
+func Bits(value: float64) -> uint64 {
+    let copy = value;
+    return *(@copy as *uint64);
+}
+
+func Main() -> ! CollectionError {
+    let n = IntArgument(0, 1024) as uint;
+
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    var aOwner = Array::Filled<float64>(allocator, n * n, 0.0)?;
+    var bOwner = Array::Filled<float64>(allocator, n * n, 0.0)?;
+    var cOwner = Array::Filled<float64>(allocator, n * n, 0.0)?;
+    let a = aOwner.AsMutableSlice();
+    let b = bOwner.AsMutableSlice();
+    let c = cOwner.AsMutableSlice();
+    for i in 0u..n {
+        for j in 0u..n {
+            a[i * n + j] = (((i + 3 * j) % 17) as float64 - 8.0) / 8.0;
+            b[i * n + j] = (((2 * i + j) % 13) as float64 - 6.0) / 6.0;
+        }
+    }
+
+    for i in 0u..n {
+        for k in 0u..n {
+            let aik = a[i * n + k];
+            for j in 0u..n {
+                c[i * n + j] += aik * b[k * n + j];
+            }
+        }
+    }
+
+    var hash: uint64 = 0xCBF29CE484222325u64;
+    for value in c {
+        hash = (hash ^ Bits(value)) * 0x100000001B3u64;
+    }
+    PrintLine("{} {:016x}", n, hash);
+}

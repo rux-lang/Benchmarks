@@ -1,0 +1,20 @@
+{
+  "baseline": "Rux",
+  "languages": ["Rux", "Rust", "Cpp", "CSharpAot", "CSharpJit"],
+  "apps": ["Sha512", "Mandelbrot", "WordCount", "BinaryTrees", "Sort", "NBody", "MatrixMultiply", "PrimeSieve", "Fannkuch", "Base64"],
+  "defaults": {
+    "profile": "standard",
+    "buildRuns": 3,
+    "runs": 5,
+    "warmups": 1,
+    "timeoutSeconds": 600
+  },
+  "cppFlags": ["-std=c++23", "-O3", "-DNDEBUG", "-g0", "-march=x86-64", "-mtune=generic", "-fno-fast-math", "-ffp-contract=off"],
+  "tools": {
+    "rux": "rux",
+    "cargo": "cargo",
+    "rustc": "rustc",
+    "clang++": "clang++",
+    "dotnet": "dotnet"
+  }
+}

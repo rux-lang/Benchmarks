@@ -1,0 +1,19 @@
+{
+  "name": "PrimeSieve",
+  "description": "Sieve of Eratosthenes over a byte array (memory bandwidth)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "1000000"
+      ],
+      "expected": "78498 37550402023"
+    },
+    "standard": {
+      "args": [
+        "100000000"
+      ],
+      "expected": "5761455 279209790387276"
+    }
+  }
+}

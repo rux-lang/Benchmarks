@@ -1,0 +1,141 @@
+// Sha512: fills a buffer with pseudo-random bytes and hashes it with a hand-written SHA-512.
+// Each further round writes the previous digest into the first 64 bytes and hashes again.
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::{ Array, CollectionError };
+import Io::{ Print, PrintLine };
+
+const K: uint64[80] = [
+    0x428A2F98D728AE22u64, 0x7137449123EF65CDu64, 0xB5C0FBCFEC4D3B2Fu64, 0xE9B5DBA58189DBBCu64,
+    0x3956C25BF348B538u64, 0x59F111F1B605D019u64, 0x923F82A4AF194F9Bu64, 0xAB1C5ED5DA6D8118u64,
+    0xD807AA98A3030242u64, 0x12835B0145706FBEu64, 0x243185BE4EE4B28Cu64, 0x550C7DC3D5FFB4E2u64,
+    0x72BE5D74F27B896Fu64, 0x80DEB1FE3B1696B1u64, 0x9BDC06A725C71235u64, 0xC19BF174CF692694u64,
+    0xE49B69C19EF14AD2u64, 0xEFBE4786384F25E3u64, 0x0FC19DC68B8CD5B5u64, 0x240CA1CC77AC9C65u64,
+    0x2DE92C6F592B0275u64, 0x4A7484AA6EA6E483u64, 0x5CB0A9DCBD41FBD4u64, 0x76F988DA831153B5u64,
+    0x983E5152EE66DFABu64, 0xA831C66D2DB43210u64, 0xB00327C898FB213Fu64, 0xBF597FC7BEEF0EE4u64,
+    0xC6E00BF33DA88FC2u64, 0xD5A79147930AA725u64, 0x06CA6351E003826Fu64, 0x142929670A0E6E70u64,
+    0x27B70A8546D22FFCu64, 0x2E1B21385C26C926u64, 0x4D2C6DFC5AC42AEDu64, 0x53380D139D95B3DFu64,
+    0x650A73548BAF63DEu64, 0x766A0ABB3C77B2A8u64, 0x81C2C92E47EDAEE6u64, 0x92722C851482353Bu64,
+    0xA2BFE8A14CF10364u64, 0xA81A664BBC423001u64, 0xC24B8B70D0F89791u64, 0xC76C51A30654BE30u64,
+    0xD192E819D6EF5218u64, 0xD69906245565A910u64, 0xF40E35855771202Au64, 0x106AA07032BBD1B8u64,
+    0x19A4C116B8D2D0C8u64, 0x1E376C085141AB53u64, 0x2748774CDF8EEB99u64, 0x34B0BCB5E19B48A8u64,
+    0x391C0CB3C5C95A63u64, 0x4ED8AA4AE3418ACBu64, 0x5B9CCA4F7763E373u64, 0x682E6FF3D6B2B8A3u64,
+    0x748F82EE5DEFB2FCu64, 0x78A5636F43172F60u64, 0x84C87814A1F0AB72u64, 0x8CC702081A6439ECu64,
+    0x90BEFFFA23631E28u64, 0xA4506CEBDE82BDE9u64, 0xBEF9A3F7B2C67915u64, 0xC67178F2E372532Bu64,
+    0xCA273ECEEA26619Cu64, 0xD186B8C721C0C207u64, 0xEADA7DD6CDE0EB1Eu64, 0xF57D4F7FEE6ED178u64,
+    0x06F067AA72176FBAu64, 0x0A637DC5A2C898A6u64, 0x113F9804BEF90DAEu64, 0x1B710B35131C471Bu64,
+    0x28DB77F523047D84u64, 0x32CAAB7B40C72493u64, 0x3C9EBE0A15C9BEBCu64, 0x431D67C49C100D4Cu64,
+    0x4CC5D4BECB3E42B6u64, 0x597F299CFC657E2Au64, 0x5FCB6FAB3AD6FAECu64, 0x6C44198C4A475817u64
+];
+
+const InitialState: uint64[8] = [
+    0x6A09E667F3BCC908u64, 0xBB67AE8584CAA73Bu64, 0x3C6EF372FE94F82Bu64, 0xA54FF53A5F1D36F1u64,
+    0x510E527FADE682D1u64, 0x9B05688C2B3E6C1Fu64, 0x1F83D9ABFB41BD6Bu64, 0x5BE0CD19137E2179u64
+];
+
+func SplitMix(state: &var uint64) -> uint64 {
+    state += 0x9E3779B97F4A7C15u64;
+    var z: uint64 = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9u64;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBu64;
+    return z ^ (z >> 31);
+}
+
+func RotateRight(x: uint64, n: uint64) -> uint64 {
+    return (x >> n) | (x << (64 - n));
+}
+
+func LoadBigEndian(data: uint8[..], offset: uint) -> uint64 {
+    var value: uint64 = 0;
+    for b in 0u..8u {
+        value = (value << 8) | (data[offset + b] as uint64);
+    }
+    return value;
+}
+
+func Compress(h: var uint64[..], w: var uint64[..], data: uint8[..], offset: uint) {
+    for t in 0u..16u {
+        w[t] = LoadBigEndian(data, offset + 8 * t);
+    }
+    for t in 16..80 {
+        let s0 = RotateRight(w[t - 15], 1) ^ RotateRight(w[t - 15], 8) ^ (w[t - 15] >> 7);
+        let s1 = RotateRight(w[t - 2], 19) ^ RotateRight(w[t - 2], 61) ^ (w[t - 2] >> 6);
+        w[t] = w[t - 16] + s0 + w[t - 7] + s1;
+    }
+    var a = h[0]; var b = h[1]; var c = h[2]; var d = h[3];
+    var e = h[4]; var f = h[5]; var g = h[6]; var hh = h[7];
+    for t in 0..80 {
+        let s1 = RotateRight(e, 14) ^ RotateRight(e, 18) ^ RotateRight(e, 41);
+        let ch = (e & f) ^ ((~e) & g);
+        let t1 = hh + s1 + ch + K[t] + w[t];
+        let s0 = RotateRight(a, 28) ^ RotateRight(a, 34) ^ RotateRight(a, 39);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0 + maj;
+        hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+}
+
+func Hash(data: uint8[..], digest: var uint8[..]) {
+    var h: uint64[8] = InitialState;
+    var w: uint64[80] = [0u64; 80];
+    let blocks = data.length / 128;
+    for i in 0..blocks {
+        Compress(h[..], w[..], data, i * 128);
+    }
+
+    // Padding: 0x80, zeros, then the message length in bits as a 128-bit big-endian number.
+    var tail: uint8[256] = [0u8; 256];
+    let rest = data.length - blocks * 128;
+    for i in 0..rest {
+        tail[i] = data[blocks * 128 + i];
+    }
+    tail[rest] = 0x80;
+    let tailLength: uint = rest < 112 ? 128 : 256;
+    let bits = (data.length as uint64) * 8;
+    for b in 0u..8u {
+        tail[tailLength - 1 - b] = (bits >> ((8 * b) as uint64)) as uint8;
+    }
+    var offset: uint = 0;
+    while offset < tailLength {
+        Compress(h[..], w[..], tail[..], offset);
+        offset += 128;
+    }
+
+    for i in 0u..8u {
+        for b in 0u..8u {
+            digest[8 * i + b] = (h[i] >> ((56 - 8 * b) as uint64)) as uint8;
+        }
+    }
+}
+
+func Main() -> ! CollectionError {
+    let mebibytes = IntArgument(0, 16);
+    let rounds = IntArgument(1, 16);
+
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    var bufferOwner = Array::Filled<uint8>(allocator, (mebibytes * 1048576) as uint, 0u8)?;
+    let buffer = bufferOwner.AsMutableSlice();
+    var state: uint64 = 1;
+    var i: uint = 0;
+    while i < buffer.length {
+        let value = SplitMix(state);
+        for b in 0u..8u {
+            buffer[i + b] = (value >> ((8 * b) as uint64)) as uint8;
+        }
+        i += 8;
+    }
+
+    var digest: uint8[64] = [0u8; 64];
+    Hash(buffer, digest[..]);
+    for r in 1..rounds {
+        for b in 0..64 {
+            buffer[b] = digest[b];
+        }
+        Hash(buffer, digest[..]);
+    }
+    for b in digest {
+        Print("{:02x}", b);
+    }
+    PrintLine();
+}

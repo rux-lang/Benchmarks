@@ -1,0 +1,21 @@
+{
+  "name": "WordCount",
+  "description": "Word frequencies of a generated text counted in a hash map (strings, hashing)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "200000",
+        "5000"
+      ],
+      "expected": "words 200000 distinct 4808\n226 fi\n185 pq\n180 jp\n160 yk\n157 mz\n157 sz\n149 tx\n147 tc\n145 ly\n144 rk"
+    },
+    "standard": {
+      "args": [
+        "10000000",
+        "100000"
+      ],
+      "expected": "words 10000000 distinct 89125\n2772 in\n2476 cq\n2466 lo\n2453 kq\n2423 uu\n2403 lj\n2373 xt\n2352 pk\n2332 jc\n2322 ps"
+    }
+  }
+}

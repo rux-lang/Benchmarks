@@ -1,0 +1,19 @@
+{
+  "name": "Sort",
+  "description": "Quicksort of pseudo-random 32-bit integers (branches, memory access)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "100000"
+      ],
+      "expected": "100000 14fa819dea707752"
+    },
+    "standard": {
+      "args": [
+        "10000000"
+      ],
+      "expected": "10000000 4e892fec541cdcf1"
+    }
+  }
+}

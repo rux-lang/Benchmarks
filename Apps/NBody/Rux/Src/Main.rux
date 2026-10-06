@@ -1,0 +1,96 @@
+// NBody: simulates the Sun and the four gas giants (Computer Language Benchmarks Game model) and
+// prints the total energy before and after as raw IEEE-754 bit patterns.
+import Io::PrintLine;
+import Math::Sqrt;
+
+const Pi: float64 = 3.141592653589793;
+const SolarMass: float64 = 4.0 * Pi * Pi;
+const DaysPerYear: float64 = 365.24;
+const Bodies: uint = 5;
+
+struct System {
+    x: float64[5];
+    y: float64[5];
+    z: float64[5];
+    vx: float64[5];
+    vy: float64[5];
+    vz: float64[5];
+    mass: float64[5];
+}
+
+func Advance(s: &var System, dt: float64) {
+    for i in 0u..Bodies {
+        for j in (i + 1)..Bodies {
+            let dx = s.x[i] - s.x[j];
+            let dy = s.y[i] - s.y[j];
+            let dz = s.z[i] - s.z[j];
+            let distance2 = dx * dx + dy * dy + dz * dz;
+            let magnitude = dt / (distance2 * Sqrt(distance2));
+            s.vx[i] -= dx * s.mass[j] * magnitude;
+            s.vy[i] -= dy * s.mass[j] * magnitude;
+            s.vz[i] -= dz * s.mass[j] * magnitude;
+            s.vx[j] += dx * s.mass[i] * magnitude;
+            s.vy[j] += dy * s.mass[i] * magnitude;
+            s.vz[j] += dz * s.mass[i] * magnitude;
+        }
+    }
+    for i in 0u..Bodies {
+        s.x[i] += dt * s.vx[i];
+        s.y[i] += dt * s.vy[i];
+        s.z[i] += dt * s.vz[i];
+    }
+}
+
+func Energy(s: &System) -> float64 {
+    var energy = 0.0;
+    for i in 0u..Bodies {
+        energy += 0.5 * s.mass[i] * (s.vx[i] * s.vx[i] + s.vy[i] * s.vy[i] + s.vz[i] * s.vz[i]);
+        for j in (i + 1)..Bodies {
+            let dx = s.x[i] - s.x[j];
+            let dy = s.y[i] - s.y[j];
+            let dz = s.z[i] - s.z[j];
+            energy -= s.mass[i] * s.mass[j] / Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+    }
+    return energy;
+}
+
+func Bits(value: float64) -> uint64 {
+    let copy = value;
+    return *(@copy as *uint64);
+}
+
+func Main() -> int {
+    let steps = IntArgument(0, 5000000);
+
+    var s = System {
+        x: [0.0, 4.84143144246472090e+00, 8.34336671824457987e+00, 1.28943695621391310e+01, 1.53796971148509165e+01],
+        y: [0.0, -1.16032004402742839e+00, 4.12479856412430479e+00, -1.51111514016986312e+01, -2.59193146099879641e+01],
+        z: [0.0, -1.03622044471123109e-01, -4.03523417114321381e-01, -2.23307578892655734e-01, 1.79258772950371181e-01],
+        vx: [0.0, 1.66007664274403694e-03 * DaysPerYear, -2.76742510726862411e-03 * DaysPerYear, 2.96460137564761618e-03 * DaysPerYear, 2.68067772490389322e-03 * DaysPerYear],
+        vy: [0.0, 7.69901118419740425e-03 * DaysPerYear, 4.99852801234917238e-03 * DaysPerYear, 2.37847173959480950e-03 * DaysPerYear, 1.62824170038242295e-03 * DaysPerYear],
+        vz: [0.0, -6.90460016972063023e-05 * DaysPerYear, 2.30417297573763929e-05 * DaysPerYear, -2.96589568540237556e-05 * DaysPerYear, -9.51592254519715870e-05 * DaysPerYear],
+        mass: [SolarMass, 9.54791938424326609e-04 * SolarMass, 2.85885980666130812e-04 * SolarMass, 4.36624404335156298e-05 * SolarMass, 5.15138902046611451e-05 * SolarMass]
+    };
+
+    // Offset the Sun's momentum so the system's total momentum is zero.
+    var px = 0.0;
+    var py = 0.0;
+    var pz = 0.0;
+    for i in 0u..Bodies {
+        px += s.vx[i] * s.mass[i];
+        py += s.vy[i] * s.mass[i];
+        pz += s.vz[i] * s.mass[i];
+    }
+    s.vx[0] = -px / SolarMass;
+    s.vy[0] = -py / SolarMass;
+    s.vz[0] = -pz / SolarMass;
+
+    let before = Energy(s);
+    for step in 0..steps {
+        Advance(s, 0.01);
+    }
+    let after = Energy(s);
+    PrintLine("{:016x} {:016x}", Bits(before), Bits(after));
+    return 0;
+}

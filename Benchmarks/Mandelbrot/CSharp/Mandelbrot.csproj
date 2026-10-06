@@ -1,4 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="../../../Shared/CSharp/Benchmark.props" />
-</Project>
-

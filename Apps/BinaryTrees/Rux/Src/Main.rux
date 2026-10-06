@@ -1,0 +1,69 @@
+// BinaryTrees: allocates and walks many complete binary trees (single-threaded variant of the
+// Computer Language Benchmarks Game program). Nodes come from a Pool, Rux's small-object
+// allocator, and are released explicitly.
+import Allocator::{ AllocError, Allocator, Layout, Pool, SystemAllocator };
+import Io::PrintLine;
+
+struct Node {
+    left: *var Node;
+    right: *var Node;
+}
+
+func Build(allocator: Allocator, depth: int) -> *var Node ! AllocError {
+    let node = allocator.Allocate(Layout::ForValue<Node>())? as *var Node;
+    if depth > 0 {
+        node.left = Build(allocator, depth - 1)?;
+        node.right = Build(allocator, depth - 1)?;
+    } else {
+        node.left = null;
+        node.right = null;
+    }
+    return node;
+}
+
+func Check(node: *var Node) -> int64 {
+    if node.left == null { return 1; }
+    return 1 + Check(node.left) + Check(node.right);
+}
+
+func Free(allocator: Allocator, node: *var Node) -> ! AllocError {
+    if node.left != null {
+        Free(allocator, node.left)?;
+        Free(allocator, node.right)?;
+    }
+    allocator.Deallocate(node as *var uint8, Layout::ForValue<Node>())?;
+}
+
+func Main() -> ! AllocError {
+    let maxDepthArgument = IntArgument(0, 18) as int;
+
+    var system = SystemAllocator();
+    let backing: Allocator = system;
+    var pool = Pool(backing, 4096);
+    var handle = pool.Handle();
+    let allocator: Allocator = handle;
+
+    let minDepth = 4;
+    let maxDepth = maxDepthArgument > minDepth + 2 ? maxDepthArgument : minDepth + 2;
+
+    let stretchDepth = maxDepth + 1;
+    let stretch = Build(allocator, stretchDepth)?;
+    PrintLine("stretch tree of depth {}\t check: {}", stretchDepth, Check(stretch));
+    Free(allocator, stretch)?;
+
+    let longLived = Build(allocator, maxDepth)?;
+    var depth = minDepth;
+    while depth <= maxDepth {
+        let iterations: int64 = 1 << (maxDepth - depth + minDepth);
+        var check: int64 = 0;
+        for i in 0..iterations {
+            let tree = Build(allocator, depth)?;
+            check += Check(tree);
+            Free(allocator, tree)?;
+        }
+        PrintLine("{}\t trees of depth {}\t check: {}", iterations, depth, check);
+        depth += 2;
+    }
+    PrintLine("long lived tree of depth {}\t check: {}", maxDepth, Check(longLived));
+    Free(allocator, longLived)?;
+}

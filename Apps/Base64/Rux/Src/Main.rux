@@ -1,0 +1,123 @@
+// Base64: encodes pseudo-random bytes as Base64 and decodes them again with a hand-written codec,
+// checks the round trip, and prints the encoded length and a hash of the encoded text.
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::{ Array, CollectionError };
+import Io::PrintLine;
+
+const Alphabet: char8[..] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+func SplitMix(state: &var uint64) -> uint64 {
+    state += 0x9E3779B97F4A7C15u64;
+    var z: uint64 = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9u64;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBu64;
+    return z ^ (z >> 31);
+}
+
+func Symbol(index: uint32) -> uint8 {
+    return Alphabet[(index & 63) as uint] as uint8;
+}
+
+func Encode(input: uint8[..], output: var uint8[..]) {
+    let full = input.length / 3 * 3;
+    var o: uint = 0;
+    var i: uint = 0;
+    while i < full {
+        let triple = ((input[i] as uint32) << 16) | ((input[i + 1] as uint32) << 8) | (input[i + 2] as uint32);
+        output[o] = Symbol(triple >> 18);
+        output[o + 1] = Symbol(triple >> 12);
+        output[o + 2] = Symbol(triple >> 6);
+        output[o + 3] = Symbol(triple);
+        o += 4;
+        i += 3;
+    }
+    let rest = input.length - full;
+    if rest == 1 {
+        let triple = (input[full] as uint32) << 16;
+        output[o] = Symbol(triple >> 18);
+        output[o + 1] = Symbol(triple >> 12);
+        output[o + 2] = 61;
+        output[o + 3] = 61;
+    } else if rest == 2 {
+        let triple = ((input[full] as uint32) << 16) | ((input[full + 1] as uint32) << 8);
+        output[o] = Symbol(triple >> 18);
+        output[o + 1] = Symbol(triple >> 12);
+        output[o + 2] = Symbol(triple >> 6);
+        output[o + 3] = 61;
+    }
+}
+
+// Returns the number of decoded bytes, or -1 for invalid input.
+func Decode(input: uint8[..], output: var uint8[..], table: int32[..]) -> int64 {
+    var o: uint = 0;
+    var i: uint = 0;
+    while i < input.length {
+        let a = table[input[i] as uint];
+        let b = table[input[i + 1] as uint];
+        if a < 0 || b < 0 { return -1; }
+        output[o] = ((a << 2) | (b >> 4)) as uint8;
+        o += 1;
+        if input[i + 2] == 61 { break; }
+        let c = table[input[i + 2] as uint];
+        if c < 0 { return -1; }
+        output[o] = (((b & 15) << 4) | (c >> 2)) as uint8;
+        o += 1;
+        if input[i + 3] == 61 { break; }
+        let d = table[input[i + 3] as uint];
+        if d < 0 { return -1; }
+        output[o] = (((c & 3) << 6) | d) as uint8;
+        o += 1;
+        i += 4;
+    }
+    return o as int64;
+}
+
+func Main() -> ! CollectionError {
+    let mebibytes = IntArgument(0, 32);
+    let rounds = IntArgument(1, 4);
+
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    let length = (mebibytes * 1048576) as uint;
+    var dataOwner = Array::Filled<uint8>(allocator, length, 0u8)?;
+    let data = dataOwner.AsMutableSlice();
+    var state: uint64 = 4;
+    var i: uint = 0;
+    while i < length {
+        let value = SplitMix(state);
+        for b in 0u..8u {
+            data[i + b] = (value >> ((8 * b) as uint64)) as uint8;
+        }
+        i += 8;
+    }
+
+    var decodeTable: int32[256] = [-1i32; 256];
+    for s in 0u..64u {
+        decodeTable[Alphabet[s] as uint8 as uint] = s as int32;
+    }
+
+    let encodedLength = (length + 2) / 3 * 4;
+    var encodedOwner = Array::Filled<uint8>(allocator, encodedLength, 0u8)?;
+    var decodedOwner = Array::Filled<uint8>(allocator, length, 0u8)?;
+    let encoded = encodedOwner.AsMutableSlice();
+    let decoded = decodedOwner.AsMutableSlice();
+    for round in 0..rounds {
+        Encode(data, encoded);
+        var same = Decode(encoded, decoded, decodeTable[..]) == length as int64;
+        var k: uint = 0;
+        while same && k < length {
+            same = decoded[k] == data[k];
+            k += 1;
+        }
+        if !same {
+            PrintLine("round trip failed");
+            fail CollectionError::Unsupported;
+        }
+    }
+
+    var hash: uint64 = 0xCBF29CE484222325u64;
+    for b in encoded {
+        hash = (hash ^ (b as uint64)) * 0x100000001B3u64;
+    }
+    PrintLine("{} {:016x}", encodedLength, hash);
+}

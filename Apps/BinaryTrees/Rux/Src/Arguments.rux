@@ -1,0 +1,93 @@
+// Command-line arguments for Rux benchmark apps.
+//
+// Rux 0.4.0 calls `Main()` without arguments and has no package that exposes them, so this file
+// reads the raw command line from the operating system: `GetCommandLineA` on Windows and
+// `/proc/self/cmdline` on Linux. `IntArgument(i, fallback)` returns the i-th argument after the
+// program name as an integer, or `fallback` when it is missing or not a number.
+import Allocator::{ Allocator, SystemAllocator };
+import Core::{ #Error, #target };
+import FileSystem::{ File, OpenOptions };
+import Format::ParseInt64;
+import Path::{ OsString, Path };
+
+const ArgumentBytes: uint = 4096;
+
+when #target.os {
+    .Windows => {
+        #Link("Kernel32.dll")
+        extern {
+            func GetCommandLineA() -> *char8;
+            func lstrlenA(text: *char8) -> int32;
+        }
+
+        // Copies the arguments after the (possibly quoted) program name into `buffer`.
+        func ReadArguments(buffer: var char8[..]) -> uint {
+            let raw = GetCommandLineA();
+            let line = raw[..lstrlenA(raw) as uint];
+            var i: uint = 0;
+            if line.length > 0 && line[0] == c8'"' {
+                i = 1;
+                while i < line.length && line[i] != c8'"' { i += 1; }
+                if i < line.length { i += 1; }
+            } else {
+                while i < line.length && line[i] != c8' ' && line[i] != c8'\t' { i += 1; }
+            }
+            var length: uint = 0;
+            while i < line.length && length < buffer.length {
+                buffer[length] = line[i];
+                length += 1;
+                i += 1;
+            }
+            return length;
+        }
+    },
+    .Linux => {
+        // `/proc/self/cmdline` holds every argument followed by a zero byte. The program name is
+        // dropped and the remaining separators become spaces.
+        func ReadArguments(buffer: var char8[..]) -> uint {
+            var system = SystemAllocator();
+            let allocator: Allocator = system;
+            var holder = OsString::FromText(allocator, "/proc/self/cmdline") catch { else => return 0 };
+            var file = File::Open(allocator, Path::FromView(holder.View()), OpenOptions::Reading()) catch {
+                else => return 0
+            };
+            var raw: char8[ArgumentBytes];
+            var filled: uint = 0;
+            loop {
+                if filled == ArgumentBytes { break; }
+                let count = file.Read(raw[filled..]) catch { else => break };
+                if count == 0 { break; }
+                filled += count;
+            }
+            file.Close() catch { else => {} };
+            var i: uint = 0;
+            while i < filled && raw[i] != 0 { i += 1; }
+            i += 1;
+            var length: uint = 0;
+            while i < filled && length < buffer.length {
+                buffer[length] = raw[i] == 0 ? c8' ' : raw[i];
+                length += 1;
+                i += 1;
+            }
+            return length;
+        }
+    },
+    else => #Error("Arguments.rux supports Windows and Linux")
+}
+
+func IntArgument(index: int, fallback: int64) -> int64 {
+    var buffer: char8[ArgumentBytes];
+    let line = buffer[..ReadArguments(buffer[..])];
+    var i: uint = 0;
+    var current = 0;
+    loop {
+        while i < line.length && (line[i] == c8' ' || line[i] == c8'\t') { i += 1; }
+        if i >= line.length { return fallback; }
+        let start = i;
+        while i < line.length && line[i] != c8' ' && line[i] != c8'\t' { i += 1; }
+        if current == index {
+            return ParseInt64(line[start..i]) catch { else => fallback };
+        }
+        current += 1;
+    }
+}

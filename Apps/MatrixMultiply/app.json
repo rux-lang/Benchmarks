@@ -1,0 +1,19 @@
+{
+  "name": "MatrixMultiply",
+  "description": "Dense double-precision matrix product (loops, cache, vectorization)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "64"
+      ],
+      "expected": "64 74fd01d7a46b0e7a"
+    },
+    "standard": {
+      "args": [
+        "1024"
+      ],
+      "expected": "1024 047f5486757ff599"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "Sha512",
+  "description": "SHA-512 of a pseudo-random buffer, re-hashed for several rounds (integer and bit operations)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "1",
+        "2"
+      ],
+      "expected": "dc950e3cd52e4afa0d99e2222750309767890bdd28bb8f300dbe19de74ca2660c9fea9502fcaabbfef15e4f8033bdd5988650409f624b2a279c3eb74babd6ce9"
+    },
+    "standard": {
+      "args": [
+        "16",
+        "16"
+      ],
+      "expected": "51e197708265dd4107cf6b59da4d14f8a6f7ef789244f5b54facb0f1a2f3194bee2476e2810cec4eed5bed0209da70d461accd085a5f5fdf7ef8dc9a95b84873"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+[Manifest]
+Version = 1
+MinRux = "0.4.0"
+
+[Package]
+Name = "Sort"
+Version = "0.1.0"
+Type = "Executable"
+
+[Dependencies]
+Allocator = { Namespace = "Rux", Version = "*" }
+Collections = { Namespace = "Rux", Version = "*" }
+Core = { Namespace = "Rux", Version = "*" }
+FileSystem = { Namespace = "Rux", Version = "*" }
+Format = { Namespace = "Rux", Version = "*" }
+Io = { Namespace = "Rux", Version = "*" }
+Math = { Namespace = "Rux", Version = "*" }
+Path = { Namespace = "Rux", Version = "*" }
+Text = { Namespace = "Rux", Version = "*" }

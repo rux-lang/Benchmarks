@@ -1,0 +1,88 @@
+// Sort: sorts pseudo-random 32-bit integers with a hand-written quicksort, checks the order and
+// prints a hash of the sorted array.
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::{ Array, CollectionError };
+import Io::PrintLine;
+
+func SplitMix(state: &var uint64) -> uint64 {
+    state += 0x9E3779B97F4A7C15u64;
+    var z: uint64 = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9u64;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBu64;
+    return z ^ (z >> 31);
+}
+
+func Swap(values: var int32[..], a: int64, b: int64) {
+    let value = values[a];
+    values[a] = values[b];
+    values[b] = value;
+}
+
+// Sorts values[low..=high]: median-of-three quicksort that recurses into the smaller part and
+// leaves ranges of fewer than 16 elements to insertion sort.
+func QuickSort(values: var int32[..], lowStart: int64, highStart: int64) {
+    var low = lowStart;
+    var high = highStart;
+    while high - low >= 16 {
+        let middle = low + (high - low) / 2;
+        if values[middle] < values[low] { Swap(values, low, middle); }
+        if values[high] < values[low] { Swap(values, low, high); }
+        if values[high] < values[middle] { Swap(values, middle, high); }
+        let pivot = values[middle];
+        var i = low;
+        var j = high;
+        while i <= j {
+            while values[i] < pivot { i += 1; }
+            while values[j] > pivot { j -= 1; }
+            if i <= j {
+                Swap(values, i, j);
+                i += 1;
+                j -= 1;
+            }
+        }
+        if j - low < high - i {
+            QuickSort(values, low, j);
+            low = i;
+        } else {
+            QuickSort(values, i, high);
+            high = j;
+        }
+    }
+    var i = low + 1;
+    while i <= high {
+        let value = values[i];
+        var j = i - 1;
+        while j >= low && values[j] > value {
+            values[j + 1] = values[j];
+            j -= 1;
+        }
+        values[j + 1] = value;
+        i += 1;
+    }
+}
+
+func Main() -> int {
+    let count = IntArgument(0, 10000000);
+
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    var state: uint64 = 3;
+    var valuesOwner = Array::Filled<int32>(allocator, count as uint, 0i32) catch { else => return 1 };
+    let values = valuesOwner.AsMutableSlice();
+    for i in 0..count {
+        values[i] = (SplitMix(state) >> 32) as uint32 as int32;
+    }
+
+    QuickSort(values, 0, count - 1);
+
+    var hash: uint64 = 0xCBF29CE484222325u64;
+    for i in 0..count {
+        if i > 0 && values[i - 1] > values[i] {
+            PrintLine("unsorted");
+            return 1;
+        }
+        hash = (hash ^ (values[i] as uint32 as uint64)) * 0x100000001B3u64;
+    }
+    PrintLine("{} {:016x}", count, hash);
+    return 0;
+}

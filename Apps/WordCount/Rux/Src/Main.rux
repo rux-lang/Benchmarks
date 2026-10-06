@@ -1,0 +1,117 @@
+// WordCount: generates a pseudo-random text from a pseudo-random vocabulary, counts how often each
+// word occurs with a hash map, and prints the 10 most frequent words.
+import Allocator::{ Allocator, SystemAllocator };
+import Collections::{ Array, CollectionError, EqualsSlice, HashMap, HashSlice, Vector };
+import Io::PrintLine;
+
+func SplitMix(state: &var uint64) -> uint64 {
+    state += 0x9E3779B97F4A7C15u64;
+    var z: uint64 = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9u64;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBu64;
+    return z ^ (z >> 31);
+}
+
+func PickWord(state: &var uint64, vocabularySize: uint64) -> uint {
+    let a = SplitMix(state) % vocabularySize;
+    let b = SplitMix(state) % vocabularySize;
+    return (a < b ? a : b) as uint;
+}
+
+// Byte-wise comparison where a prefix sorts before the longer word.
+func Less(left: char8[..], right: char8[..]) -> bool {
+    let shorter = left.length < right.length ? left.length : right.length;
+    for i in 0u..shorter {
+        if left[i] != right[i] { return left[i] < right[i]; }
+    }
+    return left.length < right.length;
+}
+
+func Before(word: char8[..], count: uint32, otherWord: char8[..], otherCount: uint32) -> bool {
+    return count != otherCount ? count > otherCount : Less(word, otherWord);
+}
+
+func Main() -> ! CollectionError {
+    let wordCount = IntArgument(0, 10000000) as uint64;
+    let vocabularySize = IntArgument(1, 100000) as uint64;
+
+    var system = SystemAllocator();
+    let allocator: Allocator = system;
+    var state: uint64 = 2;
+
+    // Vocabulary: words of 2..12 letters, stored back to back.
+    var vocabulary = Vector<char8>(allocator);
+    var startsOwner = Array::Filled<uint>(allocator, (vocabularySize + 1) as uint, 0u)?;
+    let starts = startsOwner.AsMutableSlice();
+    for k in 0u..(vocabularySize as uint) {
+        starts[k] = vocabulary.Length();
+        let length = 2 + SplitMix(state) % 11;
+        for i in 0u64..length {
+            vocabulary.Push((97 + SplitMix(state) % 26) as char8)?;
+        }
+    }
+    starts[vocabularySize as uint] = vocabulary.Length();
+    let letters = vocabulary.AsSlice();
+
+    // Text: the generator runs twice, first to measure the text and then to write it.
+    let textState = state;
+    var textLength: uint = 0;
+    for i in 0u64..wordCount {
+        let word = PickWord(state, vocabularySize);
+        textLength += starts[word + 1] - starts[word] + 1;
+    }
+    state = textState;
+    var textOwner = Array::Filled<char8>(allocator, textLength, c8' ')?;
+    let text = textOwner.AsMutableSlice();
+    var position: uint = 0;
+    for i in 0u64..wordCount {
+        let word = PickWord(state, vocabularySize);
+        for j in starts[word]..starts[word + 1] {
+            text[position] = letters[j];
+            position += 1;
+        }
+        text[position] = (i + 1) % 16 == 0 ? c8'\n' : c8' ';
+        position += 1;
+    }
+
+    // Count words: maximal runs of the letters a..z.
+    var counts = HashMap<char8[..], uint32>(allocator, HashSlice, EqualsSlice);
+    var total: uint64 = 0;
+    var start: uint = 0;
+    for i in 0u..=textLength {
+        if i < textLength && text[i] >= c8'a' && text[i] <= c8'z' { continue; }
+        if i > start {
+            var count: *var uint32 = null;
+            counts.GetOrInsert(text[start..i], 0u32, @count, null)?;
+            *count = *count + 1;
+            total += 1;
+        }
+        start = i + 1;
+    }
+
+    // Top 10 by count (descending), then by word (ascending).
+    var topWords: char8[..][10] = [""; 10];
+    var topCounts: uint32[10] = [0u32; 10];
+    var filled: uint = 0;
+    for entry in counts {
+        var slot = filled;
+        while slot > 0 && Before(entry.key, entry.value, topWords[slot - 1], topCounts[slot - 1]) {
+            slot -= 1;
+        }
+        if slot >= 10 { continue; }
+        var s: uint = filled < 10 ? filled : 9;
+        while s > slot {
+            topWords[s] = topWords[s - 1];
+            topCounts[s] = topCounts[s - 1];
+            s -= 1;
+        }
+        topWords[slot] = entry.key;
+        topCounts[slot] = entry.value;
+        if filled < 10 { filled += 1; }
+    }
+
+    PrintLine("words {} distinct {}", total, counts.Length());
+    for s in 0u..filled {
+        PrintLine("{} {}", topCounts[s], topWords[s]);
+    }
+}

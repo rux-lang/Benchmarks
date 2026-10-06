@@ -1,0 +1,21 @@
+{
+  "name": "Base64",
+  "description": "Base64 encode and decode round trip (byte manipulation, table lookups)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "1",
+        "2"
+      ],
+      "expected": "1398104 b52a4eaf283f6e7c"
+    },
+    "standard": {
+      "args": [
+        "32",
+        "4"
+      ],
+      "expected": "44739244 e7701e95e58becc5"
+    }
+  }
+}

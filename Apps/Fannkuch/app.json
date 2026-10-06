@@ -1,0 +1,19 @@
+{
+  "name": "Fannkuch",
+  "description": "Pancake flips over every permutation (small arrays, branches)",
+  "outputFile": null,
+  "profiles": {
+    "small": {
+      "args": [
+        "7"
+      ],
+      "expected": "228\nPfannkuchen(7) = 16"
+    },
+    "standard": {
+      "args": [
+        "10"
+      ],
+      "expected": "73196\nPfannkuchen(10) = 38"
+    }
+  }
+}

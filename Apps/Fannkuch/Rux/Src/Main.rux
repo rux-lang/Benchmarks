@@ -1,0 +1,67 @@
+// Fannkuch: for every permutation of 0..n-1, counts how many prefix reversals ("pancake flips")
+// it takes until 0 comes first (single-threaded fannkuch-redux from the Benchmarks Game).
+import Io::PrintLine;
+
+const MaxLength: uint = 16;
+
+func Main() -> int {
+    let n = IntArgument(0, 10) as uint;
+    if n < 1 || n > MaxLength { return 1; }
+
+    var permutation: uint[16] = [0u; 16];
+    var current: uint[16] = [0u; 16];
+    var counters: uint[16] = [0u; 16];
+    for i in 0u..n {
+        current[i] = i;
+    }
+
+    var maxFlips: int64 = 0;
+    var checksum: int64 = 0;
+    var permutationIndex: uint64 = 0;
+    var r = n;
+    loop {
+        while r != 1 {
+            counters[r - 1] = r;
+            r -= 1;
+        }
+
+        for i in 0u..n {
+            permutation[i] = current[i];
+        }
+        var flips: int64 = 0;
+        var first = permutation[0];
+        while first != 0 {
+            var low: uint = 0;
+            var high = first;
+            while low < high {
+                let value = permutation[low];
+                permutation[low] = permutation[high];
+                permutation[high] = value;
+                low += 1;
+                high -= 1;
+            }
+            flips += 1;
+            first = permutation[0];
+        }
+        if flips > maxFlips { maxFlips = flips; }
+        checksum += permutationIndex % 2 == 0 ? flips : -flips;
+
+        // Next permutation in the order used by the reference program.
+        loop {
+            if r == n {
+                PrintLine("{}", checksum);
+                PrintLine("Pfannkuchen({}) = {}", n, maxFlips);
+                return 0;
+            }
+            let rotated = current[0];
+            for i in 0u..r {
+                current[i] = current[i + 1];
+            }
+            current[r] = rotated;
+            counters[r] -= 1;
+            if counters[r] > 0 { break; }
+            r += 1;
+        }
+        permutationIndex += 1;
+    }
+}
