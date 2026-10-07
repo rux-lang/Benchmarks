@@ -14,7 +14,7 @@ const string Usage = """
 
     Options:
       --app A,B         Only these apps                 (default: all in bench.json)
-      --lang X,Y        Only these languages            (Rux, Rust, Cpp, CSharpAot, CSharpJit)
+      --lang X,Y        Only these languages            (Rux, Rust, Cpp, Go, CSharpAot, CSharpJit, JavaAot, JavaJit)
       --profile NAME    small | standard                (default: standard)
       --runs N          Measured runs per program       (default: bench.json)
       --warmups N       Unmeasured runs before those    (default: bench.json)
@@ -143,6 +143,8 @@ int Doctor()
         Console.WriteLine($"{name,-10}{version ?? "NOT FOUND"}");
         ok &= version != null;
     }
+    if (machine.Toolchains.ContainsValue(null))
+        Console.WriteLine("Install the missing tools (or set their paths under \"tools\"), or remove their languages from bench.json.");
 
     // Rux apps resolve their packages from the local cache that `rux install` fills.
     string cache = OperatingSystem.IsWindows()
@@ -175,9 +177,11 @@ MachineInfo Machine()
         MemoryBytes = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes,
         Commit = Commit(),
     };
-    foreach (var toolchain in Toolchain.All(config).DistinctBy(t => t.Folder))
-        info.Toolchains[toolchain.Folder == "CSharp" ? ".NET SDK" : toolchain.Display] = ProcessRunner.TryVersion(toolchain.VersionCommand);
-    info.Toolchains["Cargo"] = ProcessRunner.TryVersion(new Command(config.Tool("cargo"), ["--version"], root));
+    // Only the languages in bench.json, so a machine without one toolchain can leave it out there.
+    foreach (var toolchain in Toolchain.All(config).Where(t => config.Languages.Contains(t.Name)))
+        foreach (var (label, command) in toolchain.VersionCommands)
+            if (!info.Toolchains.ContainsKey(label))
+                info.Toolchains[label] = ProcessRunner.TryVersion(command);
     info.RemovedVariables = [.. ProcessRunner.RemovedVariables.Order()];
     return info;
 }

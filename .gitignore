@@ -5,6 +5,7 @@ Apps/**/target/
 Apps/**/build/
 Apps/**/.artifacts/
 Apps/**/*.ppm
+Apps/.gocache-std/
 
 # Runner build output
 Runner/bin/

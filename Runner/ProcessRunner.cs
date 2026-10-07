@@ -13,8 +13,11 @@ static class ProcessRunner
     /// a compiler optimizes or how a runtime behaves. They are listed in results.json.
     /// </summary>
     static readonly string[] RemovedPrefixes =
-        ["DOTNET_", "COMPlus_", "MSBUILD", "CARGO_", "RUSTFLAGS", "RUSTC_", "RUSTDOCFLAGS", "CCC_OVERRIDE_OPTIONS"];
-    static readonly string[] RemovedNames = ["CL", "_CL_", "LINK", "_LINK_"];
+        ["DOTNET_", "COMPlus_", "MSBUILD", "CARGO_", "RUSTFLAGS", "RUSTC_", "RUSTDOCFLAGS", "CCC_OVERRIDE_OPTIONS", "CGO_"];
+    static readonly string[] RemovedNames =
+        ["CL", "_CL_", "LINK", "_LINK_",
+         "GOFLAGS", "GOAMD64", "GOGC", "GOMEMLIMIT", "GOMAXPROCS", "GODEBUG", "GOEXPERIMENT", "GOOS", "GOARCH", "GOTOOLCHAIN",
+         "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS", "CLASSPATH"];
     static readonly string[] KeptNames = ["DOTNET_ROOT", "DOTNET_ROOT_X64", "CARGO_HOME"];
 
     public static List<string> RemovedVariables { get; } = [];
@@ -73,6 +76,13 @@ static class ProcessRunner
         info.Environment.Clear();
         foreach (var (key, value) in Environment)
             info.Environment[key] = value;
+        foreach (var (key, value) in command.Environment ?? new Dictionary<string, string>())
+        {
+            if (value == "")
+                info.Environment.Remove(key);
+            else
+                info.Environment[key] = value;
+        }
         return info;
     }
 
@@ -115,12 +125,12 @@ static class ProcessRunner
     }
 
     /// <summary>Runs a benchmark program once and measures time and peak memory.</summary>
-    public static RunSample Measure(string executable, IReadOnlyList<string> arguments, string workingDirectory, int timeoutSeconds)
+    public static RunSample Measure(Command command, int timeoutSeconds)
     {
         if (OperatingSystem.IsWindows())
-            return Native.MeasureWindows(StartInfo(new Command(executable, arguments, workingDirectory)), timeoutSeconds);
+            return Native.MeasureWindows(StartInfo(command), timeoutSeconds);
         if (OperatingSystem.IsLinux())
-            return Native.MeasureLinux(executable, arguments, workingDirectory, Environment, timeoutSeconds);
+            return Native.MeasureLinux(command.File, command.Arguments, command.WorkingDirectory, Environment, timeoutSeconds);
         throw new PlatformNotSupportedException("measurements support Windows and Linux");
     }
 }

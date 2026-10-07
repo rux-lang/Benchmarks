@@ -1,6 +1,6 @@
 {
   "baseline": "Rux",
-  "languages": ["Rux", "Rust", "Cpp", "CSharpAot", "CSharpJit"],
+  "languages": ["Rux", "Rust", "Cpp", "Go", "CSharpAot", "CSharpJit", "JavaAot", "JavaJit"],
   "apps": ["Sha512", "Mandelbrot", "WordCount", "BinaryTrees", "Sort", "NBody", "MatrixMultiply", "PrimeSieve", "Fannkuch", "Base64"],
   "defaults": {
     "profile": "standard",
@@ -10,11 +10,16 @@
     "timeoutSeconds": 600
   },
   "cppFlags": ["-std=c++23", "-O3", "-DNDEBUG", "-g0", "-march=x86-64", "-mtune=generic", "-fno-fast-math", "-ffp-contract=off"],
+  "javacFlags": ["--release", "25", "-g:none", "-encoding", "UTF-8"],
+  "nativeImageFlags": ["-march=compatibility", "-O2"],
   "tools": {
     "rux": "rux",
     "cargo": "cargo",
     "rustc": "rustc",
     "clang++": "clang++",
-    "dotnet": "dotnet"
+    "dotnet": "dotnet",
+    "go": "go",
+    "java": "java",
+    "native-image": "native-image"
   }
 }

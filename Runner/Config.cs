@@ -4,13 +4,15 @@ using System.Text.Json.Serialization;
 
 namespace Runner;
 
-/// <summary>bench.json: which languages and apps take part, default counts and tool names.</summary>
+/// <summary>bench.json: which languages and apps take part, default counts, compiler flags and tool names.</summary>
 sealed record BenchConfig(
     string Baseline,
     List<string> Languages,
     List<string> Apps,
     Defaults Defaults,
     List<string> CppFlags,
+    List<string> JavacFlags,
+    List<string> NativeImageFlags,
     Dictionary<string, string> Tools)
 {
     public string Tool(string name) => Tools.TryGetValue(name, out var path) ? path : name;

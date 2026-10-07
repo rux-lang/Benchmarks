@@ -16,22 +16,26 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
             if (toolchain.Prepare(app) is Command prepare)
                 ProcessRunner.RunTool(prepare, timeout);
             toolchain.Clean(app);
-            ProcessRunner.RunTool(toolchain.Build(app), timeout);
+            BuildOnce(toolchain, app);
             for (int i = 0; i < options.BuildRuns; i++)
             {
                 toolchain.Clean(app);
-                result.BuildSeconds.Add(ProcessRunner.RunTool(toolchain.Build(app), timeout).Seconds);
+                result.BuildSeconds.Add(BuildOnce(toolchain, app));
             }
             result.ExecutableBytes = new FileInfo(toolchain.Executable(app)).Length;
             result.DeployableBytes = toolchain.DeployFiles(app).Sum(f => new FileInfo(f).Length);
-            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-8} build {string.Join("  ", result.BuildSeconds.Select(s => $"{s,6:0.00} s"))}   exe {result.ExecutableBytes / 1024,6:0} KiB");
+            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} build {string.Join("  ", result.BuildSeconds.Select(s => $"{s,6:0.00} s"))}   exe {result.ExecutableBytes / 1024,6:0} KiB");
         }
         catch (Exception e)
         {
             result.Fail("build failed: " + e.Message);
-            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-8} BUILD FAILED  {FirstLine(e.Message)}");
+            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} BUILD FAILED  {FirstLine(e.Message)}");
         }
     }
+
+    /// <summary>Runs every build step and returns their total wall time in seconds.</summary>
+    double BuildOnce(Toolchain toolchain, AppSpec app) =>
+        toolchain.Build(app).Sum(step => ProcessRunner.RunTool(step, timeout).Seconds);
 
     /// <summary>Builds once, untimed, when the program is missing (for `run` without `build`).</summary>
     bool EnsureBuilt(AppSpec app, Toolchain toolchain, CaseResult result)
@@ -42,13 +46,14 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
         {
             if (toolchain.Prepare(app) is Command prepare)
                 ProcessRunner.RunTool(prepare, timeout);
-            ProcessRunner.RunTool(toolchain.Build(app), timeout);
+            toolchain.Clean(app);
+            BuildOnce(toolchain, app);
             return true;
         }
         catch (Exception e)
         {
             result.Fail("build failed: " + e.Message);
-            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-8} BUILD FAILED  {FirstLine(e.Message)}");
+            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} BUILD FAILED  {FirstLine(e.Message)}");
             return false;
         }
     }
@@ -79,7 +84,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
             {
                 try
                 {
-                    var sample = ProcessRunner.Measure(toolchain.Executable(app), profile.Args, workDir, timeout);
+                    var sample = ProcessRunner.Measure(toolchain.Launch(app, profile.Args, workDir), timeout);
                     string output = Validate(app, profile, sample, workDir);
                     result.Output ??= output;
                     if (round >= options.Warmups)
@@ -99,11 +104,11 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
             {
                 var time = Stats.Summarize(Metric.All[0].Values(result))!;
                 var memory = Stats.Summarize(Metric.All[2].Values(result))!;
-                Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-8} {time.Median,8:0.000} s  ±{time.CvPercent,4:0.0}%   peak {memory.Median,7:0.0} MiB");
+                Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} {time.Median,8:0.000} s  ±{time.CvPercent,4:0.0}%   peak {memory.Median,7:0.0} MiB");
             }
             else
             {
-                Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-8} FAILED  {FirstLine(result.Error ?? "")}");
+                Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} FAILED  {FirstLine(result.Error ?? "")}");
             }
         }
     }

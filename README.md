@@ -1,16 +1,17 @@
 # Benchmarks
 
-Ten small console applications, each written the same way in **Rux, Rust, C++ and C#**, plus one
-runner that builds and runs them all and compares:
+Ten small console applications, each written the same way in **Rux, Rust, C++, Go, C# and Java**,
+plus one runner that builds and runs them all and compares:
 
 - **execution time** and **CPU time**
 - **peak memory**
 - **compile time** (clean release build)
 - **executable size** and **deployable size**
 
-C# is measured twice: **C# AOT** (NativeAOT, one native executable) and **C# JIT**
-(framework-dependent, runs on the installed .NET runtime). That gives 10 apps × 5 configurations.
-Results are reported relative to Rux.
+C# and Java are measured twice each: **C# AOT** (NativeAOT, one native executable) and **C# JIT**
+(framework-dependent, runs on the installed .NET runtime), and **Java AOT** (GraalVM Native Image,
+one native executable) and **Java JIT** (a jar run by the JDK's HotSpot JVM). That gives 10 apps ×
+8 configurations. Results are reported relative to Rux.
 
 ## Quick start
 
@@ -22,9 +23,14 @@ recorded with every result):
 | `rux` on `PATH` | Rux apps |
 | Rust (`cargo`, `rustc`) | Rust apps |
 | `clang++` | C++ apps (on Windows it uses the Visual Studio C++ libraries and linker) |
+| Go (`go`) | Go apps |
 | .NET SDK 10 | C# apps and the runner |
+| JDK 25 or later (`java`) | Java JIT apps; `javac` and `jar` are taken from the same JDK |
+| GraalVM with `native-image` | Java AOT apps (`native-image` on `PATH`, in `$GRAALVM_HOME/bin`, or set in `bench.json`) |
 
-On Windows, NativeAOT also needs Visual Studio with the "Desktop development with C++" workload.
+On Windows, NativeAOT and Native Image also need Visual Studio with the "Desktop development with
+C++" workload. A machine without one of these tools can leave its languages out of `languages` in
+`bench.json`; `doctor` checks only the languages listed there.
 
 ```bash
 rux --manifest Apps/Sha512/Rux/Rux.toml install   # once: fills the local Rux package cache
@@ -56,12 +62,14 @@ saved `results.json`.
 ## Layout
 
 ```
-bench.json                    languages, apps, default counts, C++ flags, tool names
+bench.json                    languages, apps, default counts, C++/javac/native-image flags, tool names
 Apps/<App>/app.json           description, arguments per profile, expected output
 Apps/<App>/Rux/               Rux.toml, Src/Main.rux, Src/Arguments.rux
 Apps/<App>/Rust/              Cargo.toml, Cargo.lock, src/main.rs
 Apps/<App>/Cpp/               main.cpp
+Apps/<App>/Go/                go.mod, main.go
 Apps/<App>/CSharp/            <App>.csproj, Program.cs   (shared settings: Apps/Directory.Build.props)
+Apps/<App>/Java/              Main.java
 Runner/                       the C# measurement tool
 Results/                      output, not committed
 ```
@@ -74,7 +82,10 @@ harness and no timing code inside the apps. Each folder builds on its own:
 rux build --release                                  # in Apps/<App>/Rux
 cargo build --release                                # in Apps/<App>/Rust
 clang++ -std=c++23 -O3 -DNDEBUG main.cpp -o build/<App>   # in Apps/<App>/Cpp (full flags in bench.json)
+go build -trimpath -ldflags="-s -w" -o build/<App>        # in Apps/<App>/Go
 dotnet publish -c Release -r win-x64 -p:PublishAot=true   # in Apps/<App>/CSharp
+javac -d build/classes Main.java && java -cp build/classes Main   # in Apps/<App>/Java
+native-image -march=compatibility -cp build/classes -o build/<App> Main   # in Apps/<App>/Java
 ```
 
 ## The apps
@@ -104,20 +115,31 @@ dotnet publish -c Release -r win-x64 -p:PublishAot=true   # in Apps/<App>/CSharp
   bit for bit. C++ is compiled with `-ffp-contract=off` so no fused multiply-adds change results.
 - Outputs never depend on hash-map iteration order: WordCount ranks by count, then by word.
 - BinaryTrees allocates the way each language normally does: `new`/`delete` in C++, `Box` in
-  Rust, the garbage collector in C#, and `Allocator::Pool` (the small-object allocator) in Rux.
-- All builds target baseline x86-64 (`-march=x86-64`, Rust's default target CPU,
-  `IlcInstructionSet=x86-64`, Rux's default).
+  Rust, the garbage collector in Go, C# and Java, and `Allocator::Pool` (the small-object
+  allocator) in Rux.
+- All builds target baseline x86-64 (`-march=x86-64`, Rust's default target CPU, `GOAMD64=v1`,
+  `IlcInstructionSet=x86-64`, `-march=compatibility` for Native Image, Rux's default). Native
+  Image would otherwise default to x86-64-v3.
+- Java has no unsigned integers, so the Java apps use `long` with `>>>`,
+  `Long.remainderUnsigned` and `Long.compareUnsigned` where the others use unsigned 64-bit math.
+- Runtimes run with their defaults: no GC or JIT tuning flags for .NET, Go or the JVM.
 
 ## How measuring works
 
 **Build.** For each app and language the runner restores packages (untimed), does one warm-up
 build (untimed), then deletes the build output and builds again 3 times, timing each clean
-build. The compile time is the median of those builds. Executable size is the program file;
-deployable size is every file needed to run it (for C# JIT, excluding the shared .NET runtime).
+build. The compile time is the median of those builds; for Java it is javac plus `jar` or
+`native-image`. Executable size is the program file (the jar for Java JIT); deployable size is
+every file needed to run it (for C# JIT and Java JIT, excluding the shared runtime).
+
+Go compiles its standard library into the build cache rather than shipping it precompiled, and
+caches the app too. So the runner compiles the standard library once into `Apps/.gocache-std`
+(untimed) and starts every clean Go build from a fresh copy of it: like Rust and C#, the standard
+library is ready and the app itself is compiled and linked from scratch.
 
 **Run.** Every program first runs once unmeasured (warm-up), then 5 measured times. Languages
-take turns (Rux, Rust, C++, C# AOT, C# JIT, Rux, ...) so slow drifts in machine state affect
-all of them alike. Per run the runner records:
+take turns (Rux, Rust, C++, Go, C# AOT, C# JIT, Java AOT, Java JIT, Rux, ...) so slow drifts in
+machine state affect all of them alike. Per run the runner records:
 
 - wall-clock time from process creation to exit,
 - user and kernel CPU time,
@@ -125,7 +147,9 @@ all of them alike. Per run the runner records:
   the maximum resident set size on Linux (`posix_spawn` + `wait4`).
 
 Reports show the median. Execution time includes process start-up, which is what a user of a
-console application sees; for C# JIT that includes starting the runtime and JIT-compiling.
+console application sees; for C# JIT and Java JIT that includes starting the runtime and
+JIT-compiling. Java JIT is started as `java -jar`, using the JDK's own `java` (found from
+`java.home`), so the measured process is the JVM itself.
 
 **Validation.** Every run must exit with code 0 and print exactly the output stored in
 `app.json`; Mandelbrot's image file must also match the hash it prints. A failed run marks that
@@ -135,7 +159,8 @@ against .NET library implementations. `--update-expected` stores the agreed outp
 
 **Environment.** Child processes get a cleaned environment: variables that change how compilers
 optimize or runtimes behave (`DOTNET_*`, `COMPlus_*`, `MSBUILD*`, `CARGO_*`, `RUSTFLAGS`, `CL`,
-`LINK`, ...) are removed and listed in `results.json`. `--cpu K` pins the measured programs to
+`LINK`, `GOFLAGS`, `GOGC`, `GOAMD64`, `CGO_*`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `CLASSPATH`,
+...) are removed and listed in `results.json`. `--cpu K` pins the measured programs to
 one logical CPU.
 
 **Ratios.** "Relative to Rux" divides each value by Rux's value for the same app. Every metric
@@ -160,7 +185,7 @@ repository from antivirus real-time scanning (it scans every freshly built execu
 
 ## Adding an app
 
-1. Create `Apps/<Name>/` with the four language folders (copy an existing app, keep
+1. Create `Apps/<Name>/` with the six language folders (copy an existing app, keep
    `Arguments.rux` unchanged) and an `app.json` with `small` and `standard` arguments and empty
    `expected` values.
 2. Add the name to `apps` in `bench.json`.

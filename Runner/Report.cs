@@ -153,8 +153,9 @@ static class Report
     static IEnumerable<string> Notes(IReadOnlyList<Toolchain> toolchains)
     {
         yield return "Each app implements the same algorithm by hand in every language; only standard-library I/O and collections are used.";
-        yield return "Execution time includes process start-up. Compile time is a full clean release build through the language's usual build tool (rux, cargo, clang++, dotnet publish).";
-        yield return "BinaryTrees allocates with new/delete (C++), Box (Rust), the GC (C#) and Allocator::Pool (Rux).";
+        yield return "Execution time includes process start-up. Compile time is a full clean release build through the language's usual build tool (rux, cargo, clang++, go build, dotnet publish, javac + jar or native-image).";
+        yield return "Go builds start from a build cache that holds only the precompiled standard library, so the app itself is always compiled from scratch.";
+        yield return "BinaryTrees allocates with new/delete (C++), Box (Rust), the garbage collector (Go, C#, Java) and Allocator::Pool (Rux).";
         yield return "WordCount uses each standard library's hash map with its default hash function.";
         yield return "Peak memory is the working set on Windows and maxrss on Linux; the two are not comparable across operating systems.";
         foreach (var note in toolchains.Select(t => t.Note).OfType<string>())
@@ -175,7 +176,7 @@ static class Report
 
     // ------------------------------------------------------------------ HTML
 
-    static readonly string[] SeriesVars = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5"];
+    static readonly string[] SeriesVars = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5", "--series-6", "--series-7", "--series-8"];
 
     static string Html(Results results, IReadOnlyList<Toolchain> toolchains)
     {
@@ -194,21 +195,21 @@ static class Report
               color-scheme: light;
               --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
               --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
-              --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
+              --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4; --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
             }
             @media (prefers-color-scheme: dark) {
               :root:not([data-theme="light"]) {
                 color-scheme: dark;
                 --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
                 --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-                --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+                --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
               }
             }
             :root[data-theme="dark"] {
               color-scheme: dark;
               --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
               --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-              --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+              --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
             }
             * { box-sizing: border-box; }
             body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
