@@ -111,8 +111,11 @@ sealed class CppToolchain(BenchConfig config) : Toolchain(config)
     {
         Directory.CreateDirectory(Path.Combine(ProjectDir(app), "build"));
         var args = new List<string>(Config.CppFlags);
-        if (!IsWindows)
-            args.Add("-s");
+        // Link the C and C++ runtimes into the executable (clang's default for MSVC targets, made explicit).
+        if (IsWindows)
+            args.Add("-fms-runtime-lib=static");
+        else
+            args.AddRange(["-s", "-static-libstdc++", "-static-libgcc"]);
         args.AddRange(["main.cpp", "-o", Path.Combine("build", app.Name + ExeSuffix)]);
         return [new(Config.Tool("clang++"), args, ProjectDir(app))];
     }
@@ -121,8 +124,9 @@ sealed class CppToolchain(BenchConfig config) : Toolchain(config)
 }
 
 /// <summary>
-/// One C# project published two ways: NativeAOT (self-contained native executable) and JIT
-/// (framework-dependent, needs the .NET runtime). Each variant has its own artifacts folder.
+/// One C# project published two ways, both self-contained and trimmed: NativeAOT (one native
+/// executable) and JIT (the app with a trimmed copy of the .NET runtime that JIT-compiles it).
+/// Each variant has its own artifacts folder.
 /// </summary>
 sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
 {
@@ -133,14 +137,16 @@ sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
     public override string Display => aot ? "C# AOT" : "C# JIT";
     public override string Folder => "CSharp";
     public override IEnumerable<(string, Command)> VersionCommands => [(".NET SDK", new(Config.Tool("dotnet"), ["--version"], "."))];
-    public override string? Note => aot ? null : "C# JIT is framework-dependent: its deployable size excludes the shared .NET runtime it needs.";
+    public override string? Note => aot ? null
+        : "C# JIT is published self-contained and trimmed: its executable is the apphost, its deployable size includes the .NET runtime it ships.";
 
     string Artifacts(AppSpec app) => Path.Combine(ProjectDir(app), ".artifacts", Variant);
     string Project(AppSpec app) => app.Name + ".csproj";
     string PublishDir(AppSpec app) => Path.Combine(Artifacts(app), "publish", app.Name, "release_" + Rid);
 
     IEnumerable<string> CommonArgs(AppSpec app) =>
-        [Project(app), "-r", Rid, $"-p:PublishAot={(aot ? "true" : "false")}", "--artifacts-path", Artifacts(app), "-nologo", "-v", "q"];
+        [Project(app), "-r", Rid, $"-p:PublishAot={(aot ? "true" : "false")}", "-p:SelfContained=true", "-p:PublishTrimmed=true",
+         "--artifacts-path", Artifacts(app), "-nologo", "-v", "q"];
 
     public override IEnumerable<string> CleanDirs(AppSpec app)
     {
@@ -157,7 +163,7 @@ sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
 
     public override IReadOnlyList<Command> Build(AppSpec app) =>
         [new(Config.Tool("dotnet"),
-            ["publish", .. CommonArgs(app), "-c", "Release", "--self-contained", aot ? "true" : "false",
+            ["publish", .. CommonArgs(app), "-c", "Release",
              "--no-restore", "--disable-build-servers", "-nodeReuse:false"],
             ProjectDir(app))];
 
@@ -221,8 +227,9 @@ sealed class GoToolchain(BenchConfig config) : Toolchain(config)
 }
 
 /// <summary>
-/// One Java source compiled with javac, then packaged two ways: a jar run by the JDK's HotSpot JVM
-/// (JIT), or a GraalVM Native Image (AOT, one native executable). Each variant has its own folder.
+/// One Java source compiled with javac, then packaged two ways, both self-contained: a jar with a
+/// minimal jlink runtime whose HotSpot JVM JIT-compiles it (JIT), or a GraalVM Native Image (AOT,
+/// one native executable). Each variant has its own folder.
 /// </summary>
 sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
 {
@@ -231,7 +238,8 @@ sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
     public override string Name => aot ? "JavaAot" : "JavaJit";
     public override string Display => aot ? "Java AOT" : "Java JIT";
     public override string Folder => "Java";
-    public override string? Note => aot ? null : "Java JIT runs the jar with java -jar: its deployable size excludes the Java runtime it needs.";
+    public override string? Note => aot ? null
+        : "Java JIT runs the jar with java -jar from a minimal jlink runtime: its executable is the jar, its deployable size includes the runtime.";
 
     public override IEnumerable<(string, Command)> VersionCommands => aot
         ? [("JDK", new(JdkTool("java"), ["-version"], ".")), ("GraalVM", new(NativeImage, ["--version"], "."))]
@@ -239,34 +247,73 @@ sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
 
     string Output(AppSpec app) => Path.Combine(ProjectDir(app), "build", Variant);
     string Classes(AppSpec app) => Path.Combine("build", Variant, "classes");
+    /// <summary>The jlink runtime image that ships with the Java JIT jar.</summary>
+    string Runtime(AppSpec app) => Path.Combine(Output(app), "runtime");
+    string RuntimeJava(AppSpec app) => Path.Combine(Runtime(app), "bin", "java" + ExeSuffix);
 
     public override IEnumerable<string> CleanDirs(AppSpec app) => [Output(app)];
 
     public override IReadOnlyList<Command> Build(AppSpec app)
     {
         var javac = new Command(JdkTool("javac"), [.. Config.JavacFlags, "-d", Classes(app), "Main.java"], ProjectDir(app));
-        var package = aot
-            ? new Command(NativeImage,
-                [.. Config.NativeImageFlags, "-cp", Classes(app), "-o", Path.Combine("build", Variant, app.Name), "Main"],
-                ProjectDir(app))
-            : new Command(JdkTool("jar"),
-                ["--create", "--file", Path.Combine("build", Variant, app.Name + ".jar"), "--main-class", "Main", "-C", Classes(app), "."],
-                ProjectDir(app));
-        return [javac, package];
+        if (aot)
+            return [javac, new Command(NativeImage,
+                [.. Config.NativeImageFlags, .. StaticRuntimeFlags, "-cp", Classes(app), "-o", Path.Combine("build", Variant, app.Name), "Main"],
+                ProjectDir(app))];
+        var jar = new Command(JdkTool("jar"),
+            ["--create", "--file", Path.Combine("build", Variant, app.Name + ".jar"), "--main-class", "Main", "-C", Classes(app), "."],
+            ProjectDir(app));
+        var jlink = new Command(JdkTool("jlink"), [.. Config.JlinkFlags, "--output", Runtime(app)], ProjectDir(app));
+        // The class-data-sharing archive the JDK ships for fast start-up, for the JVM's default settings
+        // only (jlink's --generate-cds-archive writes four, one per heap layout, and the JVM maps one).
+        var cds = new Command(RuntimeJava(app), ["-Xshare:dump"], ProjectDir(app));
+        return [javac, jar, jlink, cds];
     }
+
+    /// <summary>
+    /// Link the C runtime into the executable. On Linux, --static-nolibc links everything but glibc
+    /// statically. On Windows, Native Image links the C runtime DLLs (vcruntime140, api-ms-win-crt-*),
+    /// and the JDK's static libraries are compiled for them (/MD), so the static runtime replaces
+    /// them at link time. Their calls go through __imp_ pointers, which the linker resolves to a
+    /// static definition only once that definition is linked in, hence the /INCLUDE list.
+    /// </summary>
+    static IEnumerable<string> StaticRuntimeFlags => IsWindows
+        ? ((string[])["/NODEFAULTLIB:msvcrt.lib", "/NODEFAULTLIB:vcruntime.lib", "/NODEFAULTLIB:ucrt.lib",
+              "libcmt.lib", "libvcruntime.lib", "libucrt.lib", "/IGNORE:4217,4286",
+              .. JdkCrtImports.Select(f => "/INCLUDE:" + f)])
+            .Select(o => "-H:NativeLinkerOption=" + o)
+        : ["--static-nolibc"];
+
+    /// <summary>C runtime functions the JDK's static libraries call through __imp_ pointers.</summary>
+    static readonly string[] JdkCrtImports =
+    [
+        "__acrt_iob_func", "__stdio_common_vfprintf", "__stdio_common_vsprintf", "__stdio_common_vsscanf",
+        "__stdio_common_vswprintf", "__stdio_common_vswscanf", "_errno", "_exit", "_itoa_s", "_strdup", "_wcsdup",
+        "_wcsupr", "_wfullpath", "_wgetcwd", "_wgetdcwd", "_wgetenv", "_wrename", "abort", "atoi", "fclose", "fgets",
+        "fopen", "fopen_s", "free", "iswctype", "malloc", "raise", "realloc", "signal", "strerror", "strerror_s",
+        "strncpy", "towupper", "wcscat", "wcscat_s", "wcscmp", "wcscpy", "wcslen", "wcsncat", "wcsncmp", "wcstok_s",
+        "wcstombs",
+    ];
 
     public override string Executable(AppSpec app) =>
         Path.Combine(Output(app), app.Name + (aot ? ExeSuffix : ".jar"));
 
     public override Command Launch(AppSpec app, IReadOnlyList<string> arguments, string workingDirectory) =>
         aot ? base.Launch(app, arguments, workingDirectory)
-            : new(JdkTool("java"), ["-jar", Executable(app), .. arguments], workingDirectory);
+            : new(RuntimeJava(app), ["-jar", Executable(app), .. arguments], workingDirectory);
 
-    /// <summary>The executable plus any shared libraries Native Image put next to it.</summary>
-    public override IEnumerable<string> DeployFiles(AppSpec app) =>
-        aot && Directory.Exists(Output(app))
+    /// <summary>
+    /// AOT: the executable plus any shared libraries Native Image put next to it.
+    /// JIT: the jar plus the whole jlink runtime.
+    /// </summary>
+    public override IEnumerable<string> DeployFiles(AppSpec app)
+    {
+        if (!Directory.Exists(Output(app)))
+            return [];
+        return aot
             ? Directory.GetFiles(Output(app)).Where(f => f == Executable(app) || f.EndsWith(".dll") || f.EndsWith(".so"))
-            : [Executable(app)];
+            : [Executable(app), .. Directory.Exists(Runtime(app)) ? Directory.GetFiles(Runtime(app), "*", SearchOption.AllDirectories) : []];
+    }
 
     /// <summary>
     /// The JDK's own bin folder, found from java.home. On Windows the `java` on PATH can be a

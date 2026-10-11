@@ -1,0 +1,4 @@
+# Link the C runtime (vcruntime and the Universal CRT) into every Rust executable, so the program
+# needs only operating-system DLLs, like the other languages. Applies to all Apps/<App>/Rust.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -12,6 +12,7 @@
   "cppFlags": ["-std=c++23", "-O3", "-DNDEBUG", "-g0", "-march=x86-64", "-mtune=generic", "-fno-fast-math", "-ffp-contract=off"],
   "javacFlags": ["--release", "25", "-g:none", "-encoding", "UTF-8"],
   "nativeImageFlags": ["-march=compatibility", "-O2"],
+  "jlinkFlags": ["--add-modules", "java.base", "--strip-debug", "--no-header-files", "--no-man-pages"],
   "tools": {
     "rux": "rux",
     "cargo": "cargo",

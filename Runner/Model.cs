@@ -56,6 +56,8 @@ sealed class CaseResult
     public List<double> BuildSeconds { get; set; } = [];
     public long? ExecutableBytes { get; set; }
     public long? DeployableBytes { get; set; }
+    /// <summary>Operating-system libraries the deployed native files load.</summary>
+    public List<string> Libraries { get; set; } = [];
     public List<RunMeasurement> Runs { get; set; } = [];
     public string? Output { get; set; }
 

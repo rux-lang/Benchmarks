@@ -25,6 +25,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
             result.ExecutableBytes = new FileInfo(toolchain.Executable(app)).Length;
             result.DeployableBytes = toolchain.DeployFiles(app).Sum(f => new FileInfo(f).Length);
             Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} build {string.Join("  ", result.BuildSeconds.Select(s => $"{s,6:0.00} s"))}   exe {result.ExecutableBytes / 1024,6:0} KiB");
+            CheckLibraries(app, toolchain, result);
         }
         catch (Exception e)
         {
@@ -40,22 +41,45 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
     /// <summary>Builds once, untimed, when the program is missing (for `run` without `build`).</summary>
     bool EnsureBuilt(AppSpec app, Toolchain toolchain, CaseResult result)
     {
-        if (File.Exists(toolchain.Executable(app)))
-            return true;
-        try
+        if (!File.Exists(toolchain.Executable(app)))
         {
-            if (toolchain.Prepare(app) is Command prepare)
-                ProcessRunner.RunTool(prepare, timeout);
-            toolchain.Clean(app);
-            BuildOnce(toolchain, app);
+            try
+            {
+                if (toolchain.Prepare(app) is Command prepare)
+                    ProcessRunner.RunTool(prepare, timeout);
+                toolchain.Clean(app);
+                BuildOnce(toolchain, app);
+            }
+            catch (Exception e)
+            {
+                result.Fail("build failed: " + e.Message);
+                Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} BUILD FAILED  {FirstLine(e.Message)}");
+                return false;
+            }
+        }
+        return CheckLibraries(app, toolchain, result);
+    }
+
+    /// <summary>
+    /// Every library a program loads must be an operating-system library or a file it ships, so
+    /// the deployable size counts everything the program needs. Records the operating-system
+    /// libraries it loads and fails the case on anything else.
+    /// </summary>
+    static bool CheckLibraries(AppSpec app, Toolchain toolchain, CaseResult result)
+    {
+        var files = toolchain.DeployFiles(app).ToList();
+        var shipped = files.Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var needed = files.SelectMany(f => NativeImports.Read(f) ?? [])
+            .Where(l => !shipped.Contains(l))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList();
+        result.Libraries = [.. needed.Where(NativeImports.IsSystem)];
+        var missing = needed.Where(l => !NativeImports.IsSystem(l)).ToList();
+        if (missing.Count == 0)
             return true;
-        }
-        catch (Exception e)
-        {
-            result.Fail("build failed: " + e.Message);
-            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} BUILD FAILED  {FirstLine(e.Message)}");
-            return false;
-        }
+        string message = "loads libraries that are neither operating-system libraries nor shipped with it: " + string.Join(", ", missing);
+        result.Fail(message);
+        Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} FAILED  {message}");
+        return false;
     }
 
     /// <summary>

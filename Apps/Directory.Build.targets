@@ -1,0 +1,54 @@
+<Project>
+  <!--
+    NativeAOT links vcruntime statically but forces the Universal CRT to be a DLL
+    (api-ms-win-crt-*). Link it statically too, so the executable needs only operating-system DLLs.
+  -->
+  <Target Name="LinkStaticUcrt" AfterTargets="SetupOSSpecificProps"
+          Condition="'$(PublishAot)' == 'true' and $(RuntimeIdentifier.StartsWith('win'))">
+    <ItemGroup>
+      <LinkerArg Remove="/NODEFAULTLIB:libucrt.lib" />
+      <LinkerArg Remove="/DEFAULTLIB:ucrt.lib" />
+      <LinkerArg Include="/NODEFAULTLIB:ucrt.lib /DEFAULTLIB:libucrt.lib" />
+    </ItemGroup>
+  </Target>
+
+  <!--
+    The self-contained JIT runtime (coreclr, clrjit, the host) loads the Universal CRT as DLLs and
+    cannot link it statically. Publish Microsoft's app-local copy from the Windows SDK next to it,
+    as the JDK does with its own runtime, so the deployable size counts the C runtime it needs.
+  -->
+  <Target Name="PublishAppLocalUcrt" BeforeTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(PublishAot)' != 'true' and '$(SelfContained)' == 'true' and $(RuntimeIdentifier.StartsWith('win'))">
+    <PropertyGroup>
+      <_KitsRoot>$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Kits\Installed Roots', 'KitsRoot10', null, RegistryView.Registry64, RegistryView.Registry32))</_KitsRoot>
+    </PropertyGroup>
+    <ItemGroup>
+      <_UcrtBase Include="$(_KitsRoot)Redist\10.*\ucrt\DLLs\x64\ucrtbase.dll" />
+    </ItemGroup>
+    <!-- Batching assigns once per SDK version; the last (newest) one wins. -->
+    <PropertyGroup>
+      <_UcrtDir>%(_UcrtBase.RootDir)%(_UcrtBase.Directory)</_UcrtDir>
+    </PropertyGroup>
+    <Error Condition="'$(_UcrtDir)' == ''"
+           Text="The app-local Universal CRT was not found under $(_KitsRoot)Redist\&lt;version&gt;\ucrt\DLLs\x64. Install the Windows SDK." />
+    <ItemGroup>
+      <_UcrtFile Include="$(_UcrtDir)*.dll" />
+      <ResolvedFileToPublish Include="@(_UcrtFile)" RelativePath="%(_UcrtFile.Filename)%(_UcrtFile.Extension)"
+                             CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+  <!--
+    A trimmed self-contained publish still copies the runtime's optional native parts: debugger and
+    dump support (mscordaccore, mscordbi, createdump, DiaSymReader), the standalone alternative GCs
+    (clrgc, clrgcexp) and QUIC (msquic). The program runs without them, and jlink leaves the Java
+    counterparts out, so the minimal deployment leaves them out too.
+  -->
+  <Target Name="RemoveOptionalRuntimeFiles" AfterTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(PublishAot)' != 'true' and '$(SelfContained)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+          Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Filename)', '^(lib)?(mscordaccore.*|mscordbi|createdump|Microsoft\.DiaSymReader\.Native\..*|clrgc|clrgcexp|msquic)$'))" />
+    </ItemGroup>
+  </Target>
+</Project>

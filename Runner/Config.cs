@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace Runner;
 
-/// <summary>bench.json: which languages and apps take part, default counts, compiler flags and tool names.</summary>
+/// <summary>bench.json: which languages and apps take part, default counts, compiler and packaging flags and tool names.</summary>
 sealed record BenchConfig(
     string Baseline,
     List<string> Languages,
@@ -13,6 +13,7 @@ sealed record BenchConfig(
     List<string> CppFlags,
     List<string> JavacFlags,
     List<string> NativeImageFlags,
+    List<string> JlinkFlags,
     Dictionary<string, string> Tools)
 {
     public string Tool(string name) => Tools.TryGetValue(name, out var path) ? path : name;

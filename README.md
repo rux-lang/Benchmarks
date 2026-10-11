@@ -7,7 +7,7 @@ Ten small console applications, each written the same way in **Rux, C++, Go, Rus
 - **compile time** (clean release build)
 - **executable size** and **deployable size**
 
-C# and Java are measured twice each: **C# AOT** (NativeAOT, one native executable) and **C# JIT** (framework-dependent, runs on the installed .NET runtime), and **Java AOT** (GraalVM Native Image, one native executable) and **Java JIT** (a jar run by the JDK's HotSpot JVM). That gives 10 apps × 8 configurations. Results are reported relative to Rux.
+C# and Java are measured twice each: **C# AOT** (NativeAOT, one native executable) and **C# JIT** (self-contained and trimmed: the app ships with the part of the .NET runtime it uses, which JIT-compiles it), and **Java AOT** (GraalVM Native Image, one native executable) and **Java JIT** (a jar shipped with a minimal `jlink` runtime whose HotSpot JVM JIT-compiles it). That gives 10 apps × 8 configurations. Results are reported relative to Rux.
 
 ## Quick start
 
@@ -20,7 +20,7 @@ Windows 11 or Linux, x86-64. Install the toolchains (any recent version; the ver
 | `clang++`                   | C++ apps (on Windows it uses the Visual Studio C++ libraries and linker)                 |
 | Go (`go`)                   | Go apps                                                                                  |
 | .NET SDK 10                 | C# apps and the runner                                                                   |
-| JDK 25 or later (`java`)    | Java JIT apps; `javac` and `jar` are taken from the same JDK                             |
+| JDK 25 or later (`java`)    | Java JIT apps; `javac`, `jar` and `jlink` are taken from the same JDK                    |
 | GraalVM with `native-image` | Java AOT apps (`native-image` on `PATH`, in `$GRAALVM_HOME/bin`, or set in `bench.json`) |
 
 On Windows, NativeAOT and Native Image also need Visual Studio with the "Desktop development with C++" workload. A machine without one of these tools can leave its languages out of `languages` in `bench.json`; `doctor` checks only the languages listed there.
@@ -52,13 +52,13 @@ Each run writes a folder under `Results/<date>-<os>/`:
 ## Layout
 
 ```
-bench.json                    languages, apps, default counts, C++/javac/native-image flags, tool names
+bench.json                    languages, apps, default counts, C++/javac/native-image/jlink flags, tool names
 Apps/<App>/app.json           description, arguments per profile, expected output
 Apps/<App>/Rux/               Rux.toml, Src/Main.rux, Src/Arguments.rux
-Apps/<App>/Rust/              Cargo.toml, Cargo.lock, src/main.rs
+Apps/<App>/Rust/              Cargo.toml, Cargo.lock, src/main.rs   (shared settings: Apps/.cargo/config.toml)
 Apps/<App>/Cpp/               main.cpp
 Apps/<App>/Go/                go.mod, main.go
-Apps/<App>/CSharp/            <App>.csproj, Program.cs   (shared settings: Apps/Directory.Build.props)
+Apps/<App>/CSharp/            <App>.csproj, Program.cs   (shared settings: Apps/Directory.Build.props and .targets)
 Apps/<App>/Java/              Main.java
 Runner/                       the C# measurement tool
 Results/                      output, not committed
@@ -69,7 +69,7 @@ Every app is an ordinary program: it takes its sizes as command-line arguments (
 ```bash
 rux build --release                                  # in Apps/<App>/Rux
 cargo build --release                                # in Apps/<App>/Rust
-clang++ -std=c++23 -O3 -DNDEBUG main.cpp -o build/<App>   # in Apps/<App>/Cpp (full flags in bench.json)
+clang++ -std=c++23 -O3 -DNDEBUG main.cpp -o build/<App>   # in Apps/<App>/Cpp (full flags in bench.json and Runner/Toolchains.cs)
 go build -trimpath -ldflags="-s -w" -o build/<App>        # in Apps/<App>/Go
 dotnet publish -c Release -r win-x64 -p:PublishAot=true   # in Apps/<App>/CSharp
 javac -d build/classes Main.java && java -cp build/classes Main   # in Apps/<App>/Java
@@ -98,13 +98,15 @@ native-image -march=compatibility -cp build/classes -o build/<App> Main   # in A
 - Floating-point results are printed as raw IEEE-754 bit patterns, so all languages must agree bit for bit. C++ is compiled with `-ffp-contract=off` so no fused multiply-adds change results.
 - Outputs never depend on hash-map iteration order: WordCount ranks by count, then by word.
 - BinaryTrees allocates the way each language normally does: `new`/`delete` in C++, `Box` in Rust, the garbage collector in Go, C# and Java, and `Allocator::Pool` (the small-object allocator) in Rux.
+- Every configuration is self-contained: its deployable files are everything it needs on a machine with only the operating system installed, so deployable sizes compare like for like. Native executables carry their own C and C++ runtime and load only operating-system libraries, as Rux does. On Windows that excludes the Universal CRT (`api-ms-win-crt-*`, `ucrtbase`), `vcruntime`, `msvcp` and `msvcrt`; on Linux only glibc and `libgcc_s` may stay dynamic. Rust uses `+crt-static` (`Apps/.cargo/config.toml`), C++ `-fms-runtime-lib=static` on Windows and `-static-libstdc++ -static-libgcc` on Linux, C# AOT links the static UCRT (`Apps/Directory.Build.targets`), and Native Image links the static CRT on Windows and uses `--static-nolibc` on Linux. Go and Rux need nothing.
+- C# JIT and Java JIT ship the smallest runtime their own tools produce. C# JIT is published with `SelfContained` and `PublishTrimmed`, without the runtime's optional debugger, dump, alternative-GC and QUIC files, and with Microsoft's app-local Universal CRT from the Windows SDK (the .NET runtime DLLs load the CRT as DLLs). Java JIT ships a `jlink` image of `java.base` (all the apps need) with `--strip-debug --no-header-files --no-man-pages`, plus the default class-data-sharing archive (`java -Xshare:dump`) that the JDK uses for fast start-up; the JDK already ships its C runtime DLLs.
 - All builds target baseline x86-64 (`-march=x86-64`, Rust's default target CPU, `GOAMD64=v1`, `IlcInstructionSet=x86-64`, `-march=compatibility` for Native Image, Rux's default). Native Image would otherwise default to x86-64-v3.
 - Java has no unsigned integers, so the Java apps use `long` with `>>>`, `Long.remainderUnsigned` and `Long.compareUnsigned` where the others use unsigned 64-bit math.
 - Runtimes run with their defaults: no GC or JIT tuning flags for .NET, Go or the JVM.
 
 ## How measuring works
 
-**Build.** For each app and language the runner restores packages (untimed), does one warm-up build (untimed), then deletes the build output and builds again 3 times, timing each clean build. The compile time is the median of those builds; for Java it is javac plus `jar` or `native-image`. Executable size is the program file (the jar for Java JIT); deployable size is every file needed to run it (for C# JIT and Java JIT, excluding the shared runtime).
+**Build.** For each app and language the runner restores packages (untimed), does one warm-up build (untimed), then deletes the build output and builds again 3 times, timing each clean build. The compile time is the median of those builds; for Java AOT it is javac plus `native-image`, for Java JIT javac, `jar`, `jlink` and the class-data-sharing dump. Executable size is the program file (the apphost for C# JIT, the jar for Java JIT); deployable size is every file needed to run it, including the runtime. After building, the runner reads the import tables (PE) or `DT_NEEDED` entries (ELF) of every deployed native file, records the operating-system libraries as `libraries` in `results.json`, and marks the case `FAIL` if it loads a library that is neither an operating-system library nor one of its own deployed files.
 
 Go compiles its standard library into the build cache rather than shipping it precompiled, and caches the app too. So the runner compiles the standard library once into `Apps/.gocache-std` (untimed) and starts every clean Go build from a fresh copy of it: like Rust and C#, the standard library is ready and the app itself is compiled and linked from scratch.
 
@@ -114,7 +116,7 @@ Go compiles its standard library into the build cache rather than shipping it pr
 - user and kernel CPU time,
 - peak memory: the peak working set on Windows (`GetProcessTimes`, `GetProcessMemoryInfo`), the maximum resident set size on Linux (`posix_spawn` + `wait4`).
 
-Reports show the median. Execution time includes process start-up, which is what a user of a console application sees; for C# JIT and Java JIT that includes starting the runtime and JIT-compiling. Java JIT is started as `java -jar`, using the JDK's own `java` (found from `java.home`), so the measured process is the JVM itself.
+Reports show the median. Execution time includes process start-up, which is what a user of a console application sees; for C# JIT and Java JIT that includes starting the runtime and JIT-compiling. Java JIT is started as `java -jar` with the `java` of its own jlink runtime, so the measured process is the JVM itself.
 
 **Validation.** Every run must exit with code 0 and print exactly the output stored in `app.json`; Mandelbrot's image file must also match the hash it prints. A failed run marks that cell `FAIL` and leaves it out of the statistics. When `app.json` has no expected output yet, all languages must agree with each other; for Sha512, Sort and Base64 the result is also checked against .NET library implementations. `--update-expected` stores the agreed output.
 
