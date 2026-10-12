@@ -31,6 +31,8 @@ abstract class Toolchain(BenchConfig config)
     public string ProjectDir(AppSpec app) => Path.Combine(app.Directory, Folder);
     /// <summary>Directories removed before every timed build.</summary>
     public abstract IEnumerable<string> CleanDirs(AppSpec app);
+    /// <summary>Every directory the build writes, removed by the `clean` command.</summary>
+    public virtual IEnumerable<string> OutputDirs(AppSpec app) => CleanDirs(app);
     /// <summary>Untimed preparation, such as restoring packages. Runs once before timed builds.</summary>
     public virtual Command? Prepare(AppSpec app) => null;
     /// <summary>The steps of one release build; compile time is their total.</summary>
@@ -156,6 +158,20 @@ sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
         if (Directory.Exists(obj))
             dirs.AddRange(Directory.GetDirectories(obj));
         return dirs;
+    }
+
+    /// <summary>
+    /// Everything under .artifacts except the other variant's folder (older layouts left more there),
+    /// plus bin and obj, which only a plain `dotnet build` (or an IDE) writes.
+    /// </summary>
+    public override IEnumerable<string> OutputDirs(AppSpec app)
+    {
+        string root = Path.GetDirectoryName(Artifacts(app))!;
+        string other = aot ? "jit" : "aot";
+        var dirs = Directory.Exists(root)
+            ? Directory.GetDirectories(root).Where(d => Path.GetFileName(d) != other).ToList()
+            : [];
+        return [.. dirs, Path.Combine(ProjectDir(app), "bin"), Path.Combine(ProjectDir(app), "obj")];
     }
 
     public override Command? Prepare(AppSpec app) =>

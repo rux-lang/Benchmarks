@@ -11,6 +11,7 @@ const string Usage = """
       run               Measure execution time, CPU time and peak memory
       all               build + run, then write the report (the usual choice)
       report [dir]      Rewrite the report files of a results folder (default: the latest)
+      clean             Delete the build output of the apps (honours --app and --lang)
 
     Options:
       --app A,B         Only these apps                 (default: all in bench.json)
@@ -66,6 +67,8 @@ switch (options.Command)
         Report.Write(saved, Toolchain.All(config), dir);
         Console.WriteLine($"Report written to {Path.Combine(dir, "report.md")}");
         return 0;
+    case "clean":
+        return Clean();
     default:
         Console.Error.WriteLine(Usage);
         return 2;
@@ -120,7 +123,8 @@ int Measure()
 
     results.FinishedAt = DateTimeOffset.Now;
     Save();
-    Directory.Delete(Path.Combine(resultsDir, "work"), recursive: true);
+    if (Directory.Exists(Path.Combine(resultsDir, "work")))
+        Directory.Delete(Path.Combine(resultsDir, "work"), recursive: true);
     Report.Write(results, Toolchain.All(config), resultsDir);
     Console.WriteLine();
     Console.WriteLine(Report.ConsoleSummary(results, Toolchain.All(config)));
@@ -165,6 +169,32 @@ int Doctor()
     if (ProcessRunner.RemovedVariables.Count > 0)
         Console.WriteLine($"Removed from child processes: {string.Join(", ", ProcessRunner.RemovedVariables)}");
     return ok ? 0 : 1;
+}
+
+int Clean()
+{
+    var dirs = (from app in apps
+                from toolchain in toolchains
+                from dir in toolchain.OutputDirs(app)
+                select (Dir: dir, Project: toolchain.ProjectDir(app))).ToList();
+    // The Go standard-library snapshot is shared by all apps, so only a full clean removes it.
+    string appsDir = Path.Combine(root, "Apps");
+    if (toolchains.Any(t => t is GoToolchain) && apps.Count == config.Apps.Count)
+        dirs.Add((Path.Combine(appsDir, ".gocache-std"), appsDir));
+
+    int removed = 0;
+    foreach (var (dir, project) in dirs.Where(d => Directory.Exists(d.Dir)))
+    {
+        Directory.Delete(dir, recursive: true);
+        Console.WriteLine($"Removed {Path.GetRelativePath(root, dir)}");
+        removed++;
+        // The AOT and JIT variants share a parent (.artifacts, build): remove it with the last one.
+        string parent = Path.GetDirectoryName(dir)!;
+        if (parent != project && !Directory.EnumerateFileSystemEntries(parent).Any())
+            Directory.Delete(parent);
+    }
+    Console.WriteLine(removed == 0 ? "Nothing to clean" : $"Removed {removed} folders");
+    return 0;
 }
 
 MachineInfo Machine()

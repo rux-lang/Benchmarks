@@ -47,7 +47,7 @@ Each run writes a folder under `Results/<date>-<os>/`:
 | `samples.csv`  | Every individual measurement                                                  |
 | `results.json` | Everything above plus machine, toolchain versions and settings                |
 
-`dotnet run --project Runner -c Release -- report [folder]` rewrites the report files from a saved `results.json`.
+`dotnet run --project Runner -c Release -- report [folder]` rewrites the report files from a saved `results.json`. `dotnet run --project Runner -c Release -- clean` deletes the build output of every app (or of those picked with `--app` and `--lang`).
 
 ## Layout
 
@@ -138,4 +138,4 @@ For stable numbers: plug in a laptop, close other programs, and consider excludi
 2. Add the name to `apps` in `bench.json`.
 3. Run `all --app <Name> --profile small --runs 1 --warmups 0 --build-runs 1 --update-expected`, then the same with `--profile standard`, and commit the stored outputs.
 
-Adding a language means one new `Toolchain` class in `Runner/Toolchains.cs` (build command,output path, clean folders) and a folder per app.
+Adding a language means one new `Toolchain` class in `Runner/Toolchains.cs` (build command, output path, clean folders) and a folder per app.
