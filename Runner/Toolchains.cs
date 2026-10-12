@@ -38,6 +38,8 @@ abstract class Toolchain(BenchConfig config)
     /// <summary>The steps of one release build; compile time is their total.</summary>
     public abstract IReadOnlyList<Command> Build(AppSpec app);
     public abstract string Executable(AppSpec app);
+    /// <summary>The file holding the compiled app, whose size is the executable size. Usually the executable itself.</summary>
+    public virtual string ProgramFile(AppSpec app) => Executable(app);
     /// <summary>How the program is started. Most languages run the executable directly.</summary>
     public virtual Command Launch(AppSpec app, IReadOnlyList<string> arguments, string workingDirectory) =>
         new(Executable(app), arguments, workingDirectory);
@@ -45,6 +47,8 @@ abstract class Toolchain(BenchConfig config)
     public virtual IEnumerable<string> DeployFiles(AppSpec app) => [Executable(app)];
     /// <summary>A note shown under the report, if the language needs one.</summary>
     public virtual string? Note => null;
+    /// <summary>True when the program file runs only inside a runtime shipped beside it (the C# assembly, the Java jar).</summary>
+    public virtual bool RuntimeHosted => false;
 
     public virtual void Clean(AppSpec app)
     {
@@ -137,10 +141,11 @@ sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
 
     public override string Name => aot ? "CSharpAot" : "CSharpJit";
     public override string Display => aot ? "C# AOT" : "C# JIT";
+    public override bool RuntimeHosted => !aot;
     public override string Folder => "CSharp";
     public override IEnumerable<(string, Command)> VersionCommands => [(".NET SDK", new(Config.Tool("dotnet"), ["--version"], "."))];
     public override string? Note => aot ? null
-        : "C# JIT is published self-contained and trimmed: its executable is the apphost, its deployable size includes the .NET runtime it ships.";
+        : "C# JIT is published self-contained and trimmed: its executable size is the app's IL assembly (not the apphost that starts it), its deployable size includes the .NET runtime it ships.";
 
     string Artifacts(AppSpec app) => Path.Combine(ProjectDir(app), ".artifacts", Variant);
     string Project(AppSpec app) => app.Name + ".csproj";
@@ -184,6 +189,9 @@ sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
             ProjectDir(app))];
 
     public override string Executable(AppSpec app) => Path.Combine(PublishDir(app), app.Name + ExeSuffix);
+
+    /// <summary>JIT: the apphost is the same launcher for every app; the app itself is the IL assembly beside it.</summary>
+    public override string ProgramFile(AppSpec app) => aot ? Executable(app) : Path.Combine(PublishDir(app), app.Name + ".dll");
 
     public override IEnumerable<string> DeployFiles(AppSpec app) =>
         Directory.Exists(PublishDir(app))
@@ -253,6 +261,7 @@ sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
 
     public override string Name => aot ? "JavaAot" : "JavaJit";
     public override string Display => aot ? "Java AOT" : "Java JIT";
+    public override bool RuntimeHosted => !aot;
     public override string Folder => "Java";
     public override string? Note => aot ? null
         : "Java JIT runs the jar with java -jar from a minimal jlink runtime: its executable is the jar, its deployable size includes the runtime.";

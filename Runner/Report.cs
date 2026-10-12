@@ -32,6 +32,35 @@ static class Report
         return ratios.Count == results.Settings.Apps.Count ? Stats.GeometricMean(ratios) : null;
     }
 
+    const string NotRanked = "—";
+    const string Dagger = "†";
+
+    /// <summary>False when the language is shown on the metric but not compared, such as the size of a runtime-hosted executable.</summary>
+    static bool Ranked(Metric metric, Toolchain toolchain) => metric.RuntimeHostedNote == null || !toolchain.RuntimeHosted;
+
+    /// <summary>The geometric mean as text: "—" when the language is not ranked on the metric, "–" when it was not measured.</summary>
+    static string GeoMeanCell(Results results, Toolchain toolchain, Metric metric, Func<string, string>? style = null) =>
+        !Ranked(metric, toolchain) ? NotRanked
+        : GeoMeanRatio(results, toolchain.Name, metric) is double g ? (style ?? (s => s))(Times(g))
+        : "–";
+
+    /// <summary>Under a summary table: "— C# JIT and Java JIT are not ranked on executable size: ...", per metric that leaves languages out.</summary>
+    static IEnumerable<string> NotRankedNotes(List<Toolchain> languages, IEnumerable<Metric> metrics)
+    {
+        foreach (var metric in metrics)
+        {
+            var names = languages.Where(t => !Ranked(metric, t)).Select(t => t.Display).ToList();
+            if (names.Count > 0)
+                yield return $"{NotRanked} {string.Join(" and ", names)} {(names.Count == 1 ? "is" : "are")} not ranked on {metric.Title.ToLowerInvariant()}: {metric.RuntimeHostedNote}.";
+        }
+    }
+
+    /// <summary>Under a metric's tables: what the dagger on a language's column means, or null when every language is ranked.</summary>
+    static string? Footnote(List<Toolchain> languages, Metric metric) =>
+        languages.All(t => Ranked(metric, t)) ? null : $"{Dagger} Shown in italics and not ranked: {metric.RuntimeHostedNote}.";
+
+    static string ColumnTitle(Toolchain toolchain, Metric metric) => toolchain.Display + (Ranked(metric, toolchain) ? "" : Dagger);
+
     static string Number(double value, string format) => value.ToString(format, Invariant);
     static string Times(double ratio) => ratio >= 10 ? $"{ratio.ToString("0", Invariant)}×" : $"{ratio.ToString("0.00", Invariant)}×";
 
@@ -82,17 +111,22 @@ static class Report
         md.AppendLine($"Each cell is the geometric mean, over all apps, of *value ÷ {baseline.Display} value*. Every metric is lower-is-better, so below 1.00× beats {baseline.Display} and above 1.00× loses to it.").AppendLine();
         md.AppendLine("| Metric | " + string.Join(" | ", languages.Select(t => t.Display)) + " |");
         md.AppendLine("|---|" + string.Concat(languages.Select(_ => "---:|")));
-        foreach (var metric in Metric.All.Where(m => Measured(results, m)))
-            md.AppendLine($"| {metric.Title} | " + string.Join(" | ", languages.Select(t => GeoMeanRatio(results, t.Name, metric) is double g ? Times(g) : "–")) + " |");
+        var measured = Metric.All.Where(m => Measured(results, m)).ToList();
+        foreach (var metric in measured)
+            md.AppendLine($"| {metric.Title} | " + string.Join(" | ", languages.Select(t => GeoMeanCell(results, t, metric))) + " |");
         md.AppendLine();
+        foreach (string note in NotRankedNotes(languages, measured))
+            md.AppendLine(note).AppendLine();
 
-        foreach (var metric in Metric.All.Where(m => Measured(results, m)))
+        foreach (var metric in measured)
         {
             md.AppendLine($"## {metric.Title} ({metric.Unit})").AppendLine();
             md.AppendLine(metric.Description + " Lower is better; the best value in each row is bold.").AppendLine();
             md.AppendLine(MarkdownTable(results, languages, metric, ratios: false)).AppendLine();
             md.AppendLine($"Relative to {baseline.Display}:").AppendLine();
             md.AppendLine(MarkdownTable(results, languages, metric, ratios: true)).AppendLine();
+            if (Footnote(languages, metric) is string footnote)
+                md.AppendLine(footnote).AppendLine();
         }
 
         var failures = results.Cases.Where(c => !c.Ok).ToList();
@@ -112,23 +146,26 @@ static class Report
     static string MarkdownTable(Results results, List<Toolchain> languages, Metric metric, bool ratios)
     {
         var table = new StringBuilder();
-        table.AppendLine("| App | " + string.Join(" | ", languages.Select(t => t.Display)) + " |");
+        table.AppendLine("| App | " + string.Join(" | ", languages.Select(t => ColumnTitle(t, metric))) + " |");
         table.AppendLine("|---|" + string.Concat(languages.Select(_ => "---:|")));
         foreach (string app in results.Settings.Apps)
         {
             var values = languages.Select(t => ratios ? Ratio(results, app, t.Name, metric) : Median(results, app, t.Name, metric)).ToList();
-            double? best = values.OfType<double>().DefaultIfEmpty().Min();
+            var ranked = values.Where((_, i) => Ranked(metric, languages[i])).OfType<double>().ToList();
+            double? best = ranked.DefaultIfEmpty().Min();
             var cells = values.Select((v, i) =>
             {
                 if (v is not double value)
                     return results.Cases.Any(c => c.App == app && c.Language == languages[i].Name && !c.Ok) ? "FAIL" : "–";
                 string text = ratios ? Times(value) : Number(value, metric.Format);
-                return value == best && values.Count(x => x != null) > 1 ? $"**{text}**" : text;
+                if (!Ranked(metric, languages[i]))
+                    return $"*{text}*";
+                return value == best && ranked.Count > 1 ? $"**{text}**" : text;
             });
             table.AppendLine($"| {app} | " + string.Join(" | ", cells) + " |");
         }
         if (ratios)
-            table.AppendLine("| *Geometric mean* | " + string.Join(" | ", languages.Select(t => GeoMeanRatio(results, t.Name, metric) is double g ? $"*{Times(g)}*" : "–")) + " |");
+            table.AppendLine("| *Geometric mean* | " + string.Join(" | ", languages.Select(t => GeoMeanCell(results, t, metric, g => $"*{g}*"))) + " |");
         return table.ToString().TrimEnd();
     }
 
@@ -170,7 +207,7 @@ static class Report
         text.AppendLine($"Geometric mean relative to {baseline.Display} (lower is better; below 1.00× beats {baseline.Display})");
         text.AppendLine($"{"",-18}" + string.Concat(languages.Select(t => $"{t.Display,10}")));
         foreach (var metric in Metric.All.Where(m => Measured(results, m)))
-            text.AppendLine($"{metric.Title,-18}" + string.Concat(languages.Select(t => $"{(GeoMeanRatio(results, t.Name, metric) is double g ? Times(g) : "–"),10}")));
+            text.AppendLine($"{metric.Title,-18}" + string.Concat(languages.Select(t => $"{GeoMeanCell(results, t, metric),10}")));
         return text.ToString();
     }
 
@@ -225,6 +262,7 @@ static class Report
             th { color: var(--ink-2); font-weight: 600; }
             td.best { font-weight: 700; }
             td.fail { color: var(--muted); }
+            td.hosted { color: var(--ink-2); font-style: italic; }
             tr.mean td { color: var(--ink-2); font-style: italic; }
             .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
             .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--c); vertical-align: -1px; }
@@ -234,6 +272,7 @@ static class Report
             svg .grid { stroke: var(--grid); }
             svg .row { stroke: var(--grid); stroke-dasharray: 2 4; }
             svg circle { stroke: var(--surface); stroke-width: 2; }
+            svg circle.hosted { fill: var(--surface); stroke: var(--c); }
             svg circle:hover { stroke: var(--ink); }
             details summary { cursor: pointer; color: var(--ink-2); font-size: 14px; margin-top: 8px; }
             #tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
@@ -252,15 +291,24 @@ static class Report
 
         html.Append($"<h2>Summary</h2><p>Geometric mean over all apps of <em>value ÷ {baseline.Display} value</em>. Every metric is lower-is-better: below 1.00× beats {baseline.Display}.</p>");
         html.Append("<div class=\"card\"><table><tr><th>Metric</th>" + string.Concat(languages.Select(t => $"<th>{WebUtility.HtmlEncode(t.Display)}</th>")) + "</tr>");
-        foreach (var metric in Metric.All.Where(m => Measured(results, m)))
-            html.Append($"<tr><td>{metric.Title}</td>" + string.Concat(languages.Select(t => $"<td>{(GeoMeanRatio(results, t.Name, metric) is double g ? Times(g) : "–")}</td>")) + "</tr>");
-        html.Append("</table></div>");
+        var measured = Metric.All.Where(m => Measured(results, m)).ToList();
+        foreach (var metric in measured)
+            html.Append($"<tr><td>{metric.Title}</td>" + string.Concat(languages.Select(t => $"<td>{GeoMeanCell(results, t, metric)}</td>")) + "</tr>");
+        html.Append("</table>");
+        foreach (string note in NotRankedNotes(languages, measured))
+            html.Append($"<p class=\"meta\">{WebUtility.HtmlEncode(note)}</p>");
+        html.Append("</div>");
 
-        foreach (var metric in Metric.All.Where(m => Measured(results, m)))
+        foreach (var metric in measured)
         {
-            html.Append($"<h2>{metric.Title}</h2><p>{WebUtility.HtmlEncode(metric.Description)} Lower is better. Logarithmic scale: each grid step is a constant factor.</p>");
+            string? footnote = Footnote(languages, metric);
+            string hollow = footnote != null ? " Hollow dots are not ranked." : "";
+            html.Append($"<h2>{metric.Title}</h2><p>{WebUtility.HtmlEncode(metric.Description)} Lower is better. Logarithmic scale: each grid step is a constant factor.{hollow}</p>");
             html.Append("<div class=\"card\">").Append(legend).Append(DotPlot(results, languages, metric));
-            html.Append("<details><summary>Table</summary>").Append(HtmlTable(results, languages, metric)).Append("</details></div>");
+            html.Append("<details><summary>Table</summary>").Append(HtmlTable(results, languages, metric));
+            if (footnote != null)
+                html.Append($"<p class=\"meta\">{WebUtility.HtmlEncode(footnote)}</p>");
+            html.Append("</details></div>");
         }
 
         var failures = results.Cases.Where(c => !c.Ok).ToList();
@@ -292,18 +340,19 @@ static class Report
     static string HtmlTable(Results results, List<Toolchain> languages, Metric metric)
     {
         var html = new StringBuilder($"<table><tr><th>App ({metric.Unit})</th>");
-        html.Append(string.Concat(languages.Select(t => $"<th>{WebUtility.HtmlEncode(t.Display)}</th>"))).Append("</tr>");
+        html.Append(string.Concat(languages.Select(t => $"<th>{WebUtility.HtmlEncode(ColumnTitle(t, metric))}</th>"))).Append("</tr>");
         foreach (string app in results.Settings.Apps)
         {
             var values = languages.Select(t => Median(results, app, t.Name, metric)).ToList();
-            double? best = values.OfType<double>().DefaultIfEmpty().Min();
+            double? best = values.Where((_, i) => Ranked(metric, languages[i])).OfType<double>().DefaultIfEmpty().Min();
             html.Append($"<tr><td>{app}</td>");
             for (int i = 0; i < languages.Count; i++)
             {
                 if (values[i] is double v)
                 {
                     string ratio = Ratio(results, app, languages[i].Name, metric) is double r ? $" <small>({Times(r)})</small>" : "";
-                    html.Append($"<td{(v == best ? " class=\"best\"" : "")}>{Number(v, metric.Format)}{ratio}</td>");
+                    string style = !Ranked(metric, languages[i]) ? " class=\"hosted\"" : v == best ? " class=\"best\"" : "";
+                    html.Append($"<td{style}>{Number(v, metric.Format)}{ratio}</td>");
                 }
                 else
                 {
@@ -313,7 +362,7 @@ static class Report
             html.Append("</tr>");
         }
         html.Append("<tr class=\"mean\"><td>Geometric mean</td>" + string.Concat(languages.Select(t =>
-            $"<td>{(GeoMeanRatio(results, t.Name, metric) is double g ? Times(g) : "–")}</td>")) + "</tr></table>");
+            $"<td>{GeoMeanCell(results, t, metric)}</td>")) + "</tr></table>");
         return html.ToString();
     }
 
@@ -355,9 +404,12 @@ static class Report
             {
                 if (Median(results, apps[row], languages[i].Name, metric) is not double v || v <= 0)
                     continue;
+                bool ranked = Ranked(metric, languages[i]);
                 string ratio = Ratio(results, apps[row], languages[i].Name, metric) is double r ? $" ({Times(r)})" : "";
-                string tipText = $"{apps[row]} · {languages[i].Display}: {Number(v, metric.Format)} {metric.Unit}{ratio}";
-                svg.Append($"<circle cx=\"{Number(X(v), "0.0")}\" cy=\"{Number(y, "0")}\" r=\"6\" fill=\"var({SeriesVars[i % SeriesVars.Length]})\" data-tip=\"{WebUtility.HtmlEncode(tipText)}\"><title>{WebUtility.HtmlEncode(tipText)}</title></circle>");
+                string tipText = $"{apps[row]} · {languages[i].Display}: {Number(v, metric.Format)} {metric.Unit}{ratio}{(ranked ? "" : ", not ranked")}";
+                string color = $"var({SeriesVars[i % SeriesVars.Length]})";
+                string look = ranked ? $"fill=\"{color}\"" : $"class=\"hosted\" style=\"--c: {color}\"";
+                svg.Append($"<circle cx=\"{Number(X(v), "0.0")}\" cy=\"{Number(y, "0")}\" r=\"6\" {look} data-tip=\"{WebUtility.HtmlEncode(tipText)}\"><title>{WebUtility.HtmlEncode(tipText)}</title></circle>");
             }
         }
         return svg.Append("</svg>").ToString();

@@ -72,8 +72,13 @@ sealed class CaseResult
 
 sealed record RunMeasurement(double WallMs, double UserMs, double SysMs, long PeakBytes);
 
-/// <summary>One column of the comparison: how to read it from a case and how to print it.</summary>
-sealed record Metric(string Key, string Title, string Unit, string Description, Func<CaseResult, IReadOnlyList<double>> Values, string Format)
+/// <summary>
+/// One column of the comparison: how to read it from a case and how to print it. When
+/// RuntimeHostedNote is set, runtime-hosted languages are shown but not ranked on the metric, and
+/// the note says why.
+/// </summary>
+sealed record Metric(string Key, string Title, string Unit, string Description, Func<CaseResult, IReadOnlyList<double>> Values, string Format,
+    string? RuntimeHostedNote = null)
 {
     public static readonly IReadOnlyList<Metric> All =
     [
@@ -86,7 +91,8 @@ sealed record Metric(string Key, string Title, string Unit, string Description, 
         new("compile", "Compile time", "s", "Clean release build with the language's own build tool (median of builds).",
             c => c.BuildSeconds, "0.00"),
         new("executable", "Executable size", "KiB", "Size of the program file.",
-            c => c.ExecutableBytes is long b ? [b / 1024.0] : [], "0"),
+            c => c.ExecutableBytes is long b ? [b / 1024.0] : [], "0",
+            "the program file needs its runtime to run; see Deployable size"),
         new("deployable", "Deployable size", "KiB", "All files needed to run the program without an SDK.",
             c => c.DeployableBytes is long b ? [b / 1024.0] : [], "0"),
     ];

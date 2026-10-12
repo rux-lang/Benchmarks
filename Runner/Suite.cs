@@ -22,7 +22,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
                 toolchain.Clean(app);
                 result.BuildSeconds.Add(BuildOnce(toolchain, app));
             }
-            result.ExecutableBytes = new FileInfo(toolchain.Executable(app)).Length;
+            result.ExecutableBytes = new FileInfo(toolchain.ProgramFile(app)).Length;
             result.DeployableBytes = toolchain.DeployFiles(app).Sum(f => new FileInfo(f).Length);
             Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} build {string.Join("  ", result.BuildSeconds.Select(s => $"{s,6:0.00} s"))}   exe {result.ExecutableBytes / 1024,6:0} KiB");
             CheckLibraries(app, toolchain, result);
