@@ -23,26 +23,40 @@ static class CompileReport
     static CaseResult? Find(Results results, string project, string language) =>
         results.Cases.Find(c => c.App == project && c.Language == language && c.Ok);
 
-    static double? Clean(Results results, string project, string language) =>
-        Find(results, project, language) is CaseResult c ? Median(c.BuildSeconds) : null;
+    /// <summary>The kinds of timed build: clean on all CPUs, clean on one CPU, and rebuild after a one-line edit.</summary>
+    enum Build { Clean, OneCpu, Rebuild }
 
-    static double? Rebuild(Results results, string project, string language) =>
-        Find(results, project, language) is CaseResult c ? Median(c.RebuildSeconds) : null;
+    /// <summary>The metric names of the builds in the CSV files.</summary>
+    static readonly (Build Build, string Name)[] BuildNames = [(Build.Clean, "clean"), (Build.OneCpu, "clean_one_cpu"), (Build.Rebuild, "rebuild")];
 
-    /// <summary>Median peak memory of the clean builds (or rebuilds) in MiB; 0 means the platform could not measure it.</summary>
-    static double? Memory(Results results, string project, string language, bool rebuild = false) =>
-        Find(results, project, language) is CaseResult c
-            ? Median((rebuild ? c.RebuildPeakBytes : c.BuildPeakBytes).Where(b => b > 0).Select(b => b / 1048576.0).ToList())
-            : null;
+    static List<double> Seconds(CaseResult c, Build build) =>
+        build switch { Build.Clean => c.BuildSeconds, Build.OneCpu => c.OneCpuBuildSeconds, _ => c.RebuildSeconds };
+
+    static List<long> PeakBytes(CaseResult c, Build build) =>
+        build switch { Build.Clean => c.BuildPeakBytes, Build.OneCpu => c.OneCpuBuildPeakBytes, _ => c.RebuildPeakBytes };
+
+    static List<double> MiB(IEnumerable<long> bytes) => bytes.Where(b => b > 0).Select(b => b / 1048576.0).ToList();
+
+    /// <summary>Median build time in seconds.</summary>
+    static double? Time(Results results, string project, string language, Build build = Build.Clean) =>
+        Find(results, project, language) is CaseResult c ? Median(Seconds(c, build)) : null;
+
+    /// <summary>Median peak memory of the builds in MiB; 0 means the platform could not measure it.</summary>
+    static double? Memory(Results results, string project, string language, Build build = Build.Clean) =>
+        Find(results, project, language) is CaseResult c ? Median(MiB(PeakBytes(c, build))) : null;
 
     /// <summary>Clean build of the project minus clean build of Baseline: the time spent on the project's own code.</summary>
-    static double? CodeSeconds(Results results, string project, string language) =>
-        Clean(results, project, language) is double large && Clean(results, BaselineProject, language) is double small ? large - small : null;
+    static double? CodeSeconds(Results results, string project, string language, Build build = Build.Clean) =>
+        Time(results, project, language, build) is double large && Time(results, BaselineProject, language, build) is double small ? large - small : null;
+
+    /// <summary>How many times faster the clean build is on all CPUs than on one.</summary>
+    static double? SpeedUp(Results results, string project, string language) =>
+        Time(results, project, language, Build.OneCpu) is double one && Time(results, project, language) is double all && all > 0 ? one / all : null;
 
     /// <summary>The project's lines beyond Baseline's, per second of <see cref="CodeSeconds"/>.</summary>
-    static double? LinesPerSecond(Results results, string project, string language)
+    static double? LinesPerSecond(Results results, string project, string language, Build build = Build.Clean)
     {
-        if (CodeSeconds(results, project, language) is not double seconds || seconds <= 0)
+        if (CodeSeconds(results, project, language, build) is not double seconds || seconds <= 0)
             return null;
         int? lines = Find(results, project, language)?.SourceLines - (Find(results, BaselineProject, language)?.SourceLines ?? 0);
         return lines is int l ? l / seconds : null;
@@ -54,19 +68,29 @@ static class CompileReport
     {
         var rows = new List<Row>
         {
-            new($"Clean build of {project}", "s", "0.00", l => Clean(results, project, l)),
+            new($"Clean build of {project}", "s", "0.00", l => Time(results, project, l)),
         };
-        if (results.Settings.Apps.Contains(BaselineProject))
+        bool hasBaseline = results.Settings.Apps.Contains(BaselineProject);
+        if (hasBaseline)
         {
-            rows.Add(new($"Clean build of {BaselineProject}", "s", "0.00", l => Clean(results, BaselineProject, l)));
+            rows.Add(new($"Clean build of {BaselineProject}", "s", "0.00", l => Time(results, BaselineProject, l)));
             rows.Add(new($"{project} − {BaselineProject}", "s", "0.00", l => CodeSeconds(results, project, l)));
             rows.Add(new("Compile speed", "lines/s", "0", l => LinesPerSecond(results, project, l), LowerIsBetter: false));
         }
-        rows.Add(new("Rebuild after a one-line edit", "s", "0.00", l => Rebuild(results, project, l)));
+        rows.Add(new($"Clean build of {project} on one CPU", "s", "0.00", l => Time(results, project, l, Build.OneCpu)));
+        if (hasBaseline)
+        {
+            rows.Add(new($"Clean build of {BaselineProject} on one CPU", "s", "0.00", l => Time(results, BaselineProject, l, Build.OneCpu)));
+            rows.Add(new($"{project} − {BaselineProject} on one CPU", "s", "0.00", l => CodeSeconds(results, project, l, Build.OneCpu)));
+            rows.Add(new("Compile speed on one CPU", "lines/s", "0", l => LinesPerSecond(results, project, l, Build.OneCpu), LowerIsBetter: false));
+        }
+        rows.Add(new("Parallel speed-up", "×", "0.00", l => SpeedUp(results, project, l), LowerIsBetter: false));
+        rows.Add(new("Rebuild after a one-line edit", "s", "0.00", l => Time(results, project, l, Build.Rebuild)));
         rows.Add(new($"Peak memory, clean build of {project}", "MiB", "0", l => Memory(results, project, l)));
-        if (results.Settings.Apps.Contains(BaselineProject))
+        if (hasBaseline)
             rows.Add(new($"Peak memory, clean build of {BaselineProject}", "MiB", "0", l => Memory(results, BaselineProject, l)));
-        rows.Add(new("Peak memory, rebuild", "MiB", "0", l => Memory(results, project, l, rebuild: true)));
+        rows.Add(new($"Peak memory, clean build of {project} on one CPU", "MiB", "0", l => Memory(results, project, l, Build.OneCpu)));
+        rows.Add(new("Peak memory, rebuild", "MiB", "0", l => Memory(results, project, l, Build.Rebuild)));
         rows.Add(new("Source files", "", "0", l => Find(results, project, l)?.SourceFiles));
         rows.Add(new("Source lines", "", "0", l => Find(results, project, l)?.SourceLines));
         rows.Add(new("Executable size", "KiB", "0", l => Find(results, project, l)?.ExecutableBytes / 1024.0, RankHosted: false));
@@ -85,9 +109,14 @@ static class CompileReport
         File.WriteAllText(Path.Combine(dir, "report.html"), Html(results, toolchains));
     }
 
-    static string Settings(Results results) => results.Settings.BuildRuns == 1
-        ? "1 timed clean build and 1 rebuild after a one-line edit per project and language"
-        : $"{results.Settings.BuildRuns} timed clean builds and {results.Settings.BuildRuns} rebuilds after a one-line edit per project and language";
+    static string Settings(Results results)
+    {
+        int n = results.Settings.BuildRuns;
+        string cpu = results.Settings.Cpu is int k ? $" (CPU {k})" : "";
+        return n == 1
+            ? $"1 timed clean build on all CPUs, 1 on one CPU{cpu} and 1 rebuild after a one-line edit per project and language"
+            : $"{n} timed clean builds on all CPUs, {n} on one CPU{cpu} and {n} rebuilds after a one-line edit per project and language";
+    }
 
     static string SummaryCsv(Results results)
     {
@@ -103,14 +132,21 @@ static class CompileReport
                     s.Mean.ToString("R", Invariant), s.StdDev.ToString("R", Invariant), s.Count, ratio));
             }
             var baseline = Find(results, c.App, results.Settings.Baseline);
-            Add("clean", "s", c.BuildSeconds, baseline != null ? Median(baseline.BuildSeconds) : null);
-            Add("rebuild", "s", c.RebuildSeconds, baseline != null ? Median(baseline.RebuildSeconds) : null);
-            Add("clean_memory", "MiB", c.BuildPeakBytes.Where(b => b > 0).Select(b => b / 1048576.0).ToList(), Memory(results, c.App, results.Settings.Baseline));
-            Add("rebuild_memory", "MiB", c.RebuildPeakBytes.Where(b => b > 0).Select(b => b / 1048576.0).ToList(), Memory(results, c.App, results.Settings.Baseline, rebuild: true));
-            if (c.App != BaselineProject && CodeSeconds(results, c.App, c.Language) is double code)
-                Add("code", "s", [code], CodeSeconds(results, c.App, results.Settings.Baseline));
-            if (c.App != BaselineProject && LinesPerSecond(results, c.App, c.Language) is double speed)
-                Add("speed", "lines/s", [speed], LinesPerSecond(results, c.App, results.Settings.Baseline));
+            string reference = results.Settings.Baseline;
+            foreach (var (build, name) in BuildNames)
+            {
+                Add(name, "s", Seconds(c, build), baseline != null ? Median(Seconds(baseline, build)) : null);
+                Add(name + "_memory", "MiB", MiB(PeakBytes(c, build)), Memory(results, c.App, reference, build));
+            }
+            if (SpeedUp(results, c.App, c.Language) is double speedUp)
+                Add("speedup", "x", [speedUp], SpeedUp(results, c.App, reference));
+            foreach (var (build, suffix) in new[] { (Build.Clean, ""), (Build.OneCpu, "_one_cpu") })
+            {
+                if (c.App != BaselineProject && CodeSeconds(results, c.App, c.Language, build) is double code)
+                    Add("code" + suffix, "s", [code], CodeSeconds(results, c.App, reference, build));
+                if (c.App != BaselineProject && LinesPerSecond(results, c.App, c.Language, build) is double speed)
+                    Add("speed" + suffix, "lines/s", [speed], LinesPerSecond(results, c.App, reference, build));
+            }
             if (c.ExecutableBytes is long exe)
                 Add("executable", "KiB", [exe / 1024.0], baseline?.ExecutableBytes / 1024.0);
             if (c.DeployableBytes is long deploy)
@@ -124,14 +160,15 @@ static class CompileReport
         var csv = new StringBuilder("project,language,metric,unit,index,value\n");
         foreach (var c in results.Cases)
         {
-            for (int i = 0; i < c.BuildSeconds.Count; i++)
-                csv.AppendLine($"{c.App},{c.Language},clean,s,{i},{c.BuildSeconds[i].ToString("R", Invariant)}");
-            for (int i = 0; i < c.RebuildSeconds.Count; i++)
-                csv.AppendLine($"{c.App},{c.Language},rebuild,s,{i},{c.RebuildSeconds[i].ToString("R", Invariant)}");
-            for (int i = 0; i < c.BuildPeakBytes.Count; i++)
-                csv.AppendLine($"{c.App},{c.Language},clean_memory,MiB,{i},{(c.BuildPeakBytes[i] / 1048576.0).ToString("R", Invariant)}");
-            for (int i = 0; i < c.RebuildPeakBytes.Count; i++)
-                csv.AppendLine($"{c.App},{c.Language},rebuild_memory,MiB,{i},{(c.RebuildPeakBytes[i] / 1048576.0).ToString("R", Invariant)}");
+            foreach (var (build, name) in BuildNames)
+            {
+                var seconds = Seconds(c, build);
+                for (int i = 0; i < seconds.Count; i++)
+                    csv.AppendLine($"{c.App},{c.Language},{name},s,{i},{seconds[i].ToString("R", Invariant)}");
+                var bytes = PeakBytes(c, build);
+                for (int i = 0; i < bytes.Count; i++)
+                    csv.AppendLine($"{c.App},{c.Language},{name}_memory,MiB,{i},{(bytes[i] / 1048576.0).ToString("R", Invariant)}");
+            }
         }
         return csv.ToString();
     }
@@ -146,6 +183,7 @@ static class CompileReport
         yield return "A rebuild changes one line in the last module (which only Main calls) and builds again without cleaning: what each build tool does incrementally. Release Cargo builds are not incremental, C# recompiles the project, javac recompiles every file, and Java JIT keeps its jlink runtime.";
         yield return "Peak memory is the build's highest memory use. On Windows it is the memory committed by all of the build's processes together (the build tool and every compiler, linker or server it starts, tracked by a job object), so parallel compilers add up. On Linux it is the peak resident set of the build's largest single process, so the two are not comparable across operating systems. For a build of several steps (Java), it is the step that used the most.";
         yield return "C++ builds with CMake and Ninja, which compiles the translation units in parallel (on Windows CMake links with lld, its default for clang); the other build tools use as many cores as they normally do.";
+        yield return "A build on one CPU is the same clean build with the runner and every process the build starts pinned to one logical CPU (CPU affinity, which child processes inherit), so the build gets one CPU's worth of time whatever it does. Cargo and Ninja are also told to run one job (--jobs 1, --parallel 1) rather than relying on them to read the affinity. The parallel speed-up is the clean build on one CPU divided by the clean build on all CPUs: how much faster the build gets from the other CPUs.";
         foreach (var note in toolchains.Select(t => t.Note).OfType<string>())
             yield return note;
     }
@@ -162,9 +200,9 @@ static class CompileReport
         foreach (string project in LargeProjects(results))
         {
             md.AppendLine($"## {project}").AppendLine();
-            md.AppendLine("Medians. Lower is better except for compile speed; the best value in each row is bold.").AppendLine();
+            md.AppendLine("Medians. Lower is better except for compile speed and parallel speed-up; the best value in each row is bold.").AppendLine();
             md.AppendLine(MarkdownTable(results, project, languages, ratios: false)).AppendLine();
-            md.AppendLine($"Relative to {baseline.Display} (*value ÷ {baseline.Display} value*; for compile speed, above 1.00× is faster than {baseline.Display}):").AppendLine();
+            md.AppendLine($"Relative to {baseline.Display} (*value ÷ {baseline.Display} value*; for compile speed and parallel speed-up, above 1.00× is more than {baseline.Display}):").AppendLine();
             md.AppendLine(MarkdownTable(results, project, languages, ratios: true)).AppendLine();
         }
         var failures = results.Cases.Where(c => !c.Ok).ToList();
@@ -215,10 +253,10 @@ static class CompileReport
         var text = new StringBuilder();
         foreach (string project in LargeProjects(results))
         {
-            text.AppendLine($"{project} (medians; lower is better except compile speed)");
-            text.AppendLine($"{"",-44}" + string.Concat(languages.Select(t => $"{t.Display,10}")));
+            text.AppendLine($"{project} (medians; lower is better except compile speed and parallel speed-up)");
+            text.AppendLine($"{"",-52}" + string.Concat(languages.Select(t => $"{t.Display,10}")));
             foreach (var row in Rows(results, project).Where(Ranked))
-                text.AppendLine($"{row.Title + (row.Unit.Length > 0 ? $" ({row.Unit})" : ""),-44}" +
+                text.AppendLine($"{row.Title + (row.Unit.Length > 0 ? $" ({row.Unit})" : ""),-52}" +
                     string.Concat(Cells(results, row, languages, ratios: false).Select(c => $"{c.Text,10}")));
         }
         return text.ToString();
@@ -241,7 +279,12 @@ static class CompileReport
                 ? $"<p>Each bar is a full clean release build. The pale part is the build of {BaselineProject} (one module, same setup): the fixed cost of starting the tools, the standard library and linking. The coloured part is the rest: compiling {project}'s own code. Shorter is better.</p>"
                 : "<p>Each bar is a full clean release build. Shorter is better.</p>");
             html.Append("<div class=\"card\">").Append(Bars(results, languages,
-                l => hasBaseline ? Clean(results, BaselineProject, l) : null, l => Clean(results, project, l), "s")).Append("</div>");
+                l => hasBaseline ? Time(results, BaselineProject, l) : null, l => Time(results, project, l), "s")).Append("</div>");
+
+            html.Append($"<h2>Clean build of {project} on one CPU</h2>");
+            html.Append($"<p>Each bar is a clean build with every build process pinned to one logical CPU. The pale part is the same build on all {results.Machine.LogicalCores} logical CPUs, so the coloured part is the time the other CPUs save. Shorter is better.</p>");
+            html.Append("<div class=\"card\">").Append(Bars(results, languages,
+                l => Time(results, project, l), l => Time(results, project, l, Build.OneCpu), "s", partLabel: "on all CPUs")).Append("</div>");
 
             html.Append($"<h2>Peak memory of the clean build of {project}</h2>");
             html.Append(hasBaseline
@@ -252,9 +295,9 @@ static class CompileReport
 
             html.Append($"<h2>Rebuild of {project} after a one-line edit</h2>");
             html.Append("<p>One line of the last module changes, and the project builds again without cleaning. Shorter is better.</p>");
-            html.Append("<div class=\"card\">").Append(Bars(results, languages, _ => null, l => Rebuild(results, project, l), "s")).Append("</div>");
+            html.Append("<div class=\"card\">").Append(Bars(results, languages, _ => null, l => Time(results, project, l, Build.Rebuild), "s")).Append("</div>");
 
-            html.Append($"<h2>Summary of {project}</h2><p>Medians. Lower is better except for compile speed; the best value in each row is bold, and ratios are relative to {baseline.Display}.</p>");
+            html.Append($"<h2>Summary of {project}</h2><p>Medians. Lower is better except for compile speed and parallel speed-up; the best value in each row is bold, and ratios are relative to {baseline.Display}.</p>");
             html.Append("<div class=\"card\">").Append(HtmlTable(results, project, languages)).Append("</div>");
         }
         var failures = results.Cases.Where(c => !c.Ok).ToList();
@@ -287,8 +330,12 @@ static class CompileReport
         return html.Append("</table>").ToString();
     }
 
-    /// <summary>One horizontal bar per language on a linear axis; the part up to <paramref name="fixedPart"/> is drawn pale.</summary>
-    static string Bars(Results results, List<Toolchain> languages, Func<string, double?> fixedPart, Func<string, double?> total, string unit, string format = "0.00")
+    /// <summary>
+    /// One horizontal bar per language on a linear axis; the part up to <paramref name="fixedPart"/>
+    /// is drawn pale, and its tooltip calls it <paramref name="partLabel"/>.
+    /// </summary>
+    static string Bars(Results results, List<Toolchain> languages, Func<string, double?> fixedPart, Func<string, double?> total, string unit,
+        string format = "0.00", string partLabel = "for " + BaselineProject)
     {
         const double Left = 90, Right = 870, Top = 8, RowHeight = 30, BarHeight = 18;
         var totals = languages.Select(t => total(t.Name)).ToList();
@@ -321,7 +368,7 @@ static class CompileReport
             }
             double part = Math.Clamp(fixedPart(languages[i].Name) ?? 0, 0, value);
             string tip = $"{languages[i].Display}: {value.ToString(format, Invariant)} {unit}" +
-                (part > 0 ? $" ({part.ToString(format, Invariant)} for {BaselineProject})" : "");
+                (part > 0 ? $" ({part.ToString(format, Invariant)} {partLabel})" : "");
             string h = Report.Number(BarHeight, "0"), top = Report.Number(y, "0.0");
             if (part > 0)
                 svg.Append($"<rect x=\"{Left}\" y=\"{top}\" width=\"{Report.Number(X(part) - Left, "0.0")}\" height=\"{h}\" fill=\"{color}\" opacity=\"0.35\" data-tip=\"{WebUtility.HtmlEncode(tip)}\"/>");

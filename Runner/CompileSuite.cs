@@ -5,8 +5,9 @@ namespace Runner;
 
 /// <summary>
 /// The compile benchmark. For every generated project and language: the timed clean builds of
-/// <see cref="Suite.Build"/>, then (for a project with an editable module) timed rebuilds after
-/// changing one line of that module, then one run of the program to check its output.
+/// <see cref="Suite.Build"/>, the same clean builds pinned to one CPU, then (for a project with an
+/// editable module) timed rebuilds after changing one line of that module, then one run of the
+/// program to check its output.
 /// </summary>
 sealed class CompileSuite(BenchConfig config, Options options, Results results, string resultsDir)
 {
@@ -20,10 +21,40 @@ sealed class CompileSuite(BenchConfig config, Options options, Results results, 
             if (project.Sources?.GetValueOrDefault(toolchain.Folder) is SourceCount sources)
                 (result.SourceFiles, result.SourceLines) = (sources.Files, sources.Lines);
             suite.Build(project, toolchain);
+            if (result.Ok)
+                MeasureOneCpuBuilds(project, toolchain, result);
             if (result.Ok && EditableFile(project, toolchain) is string file)
                 MeasureRebuilds(project, toolchain, result, file);
         }
         Check(project, toolchains);
+    }
+
+    /// <summary>
+    /// Clean builds with every build process pinned to one logical CPU, each tool running one job at
+    /// a time: compared with the clean builds on all CPUs, how much a build gains from parallelism.
+    /// </summary>
+    void MeasureOneCpuBuilds(AppSpec project, Toolchain toolchain, CaseResult result)
+    {
+        int cpu = results.Settings.Cpu ?? 0;
+        try
+        {
+            ProcessRunner.OnOneCpu(cpu, () =>
+            {
+                for (int i = 0; i < options.BuildRuns; i++)
+                {
+                    toolchain.Clean(project);
+                    var (seconds, peak) = Suite.RunSteps(toolchain.SerialBuild(project), suite.Timeout(project));
+                    result.OneCpuBuildSeconds.Add(seconds);
+                    result.OneCpuBuildPeakBytes.Add(peak);
+                }
+            });
+            Console.WriteLine($"  {project.Name,-15}{toolchain.Display,-9} 1 CPU {string.Join("  ", result.OneCpuBuildSeconds.Select(s => $"{s,6:0.00} s"))}   mem {result.OneCpuBuildPeakBytes.Max() / 1048576.0,6:0} MiB");
+        }
+        catch (Exception e)
+        {
+            result.Fail("build on one CPU failed: " + e.Message);
+            Console.WriteLine($"  {project.Name,-15}{toolchain.Display,-9} 1 CPU BUILD FAILED  {Suite.FirstLine(e.Message)}");
+        }
     }
 
     /// <summary>

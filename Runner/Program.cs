@@ -24,7 +24,7 @@ const string Usage = """
       --runs N          Measured runs per program       (default: bench.json)
       --warmups N       Unmeasured runs before those    (default: bench.json)
       --build-runs N    Timed clean builds per program, and rebuilds for compile (default: bench.json)
-      --cpu K           Pin the measured programs to logical CPU K
+      --cpu K           Pin the measured programs (compile: the builds on one CPU) to logical CPU K
       --timeout S       Seconds before a build or run is stopped
       --update-expected Store agreed outputs in app.json when none are stored yet
     """;
@@ -179,6 +179,8 @@ int Compile()
     var (resultsDir, results) = NewResults(projects.Select(p => p.Name).ToList(), "-compile");
     results.Settings.Runs = 0;
     results.Settings.Warmups = 0;
+    // The CPU that the builds on one CPU are pinned to.
+    results.Settings.Cpu = options.Cpu ?? ProcessRunner.FirstAllowedCpu();
     var suite = new CompileSuite(config, options, results, resultsDir);
     void Save() => Json.Write(Path.Combine(resultsDir, "results.json"), results);
 

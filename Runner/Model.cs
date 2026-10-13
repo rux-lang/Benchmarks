@@ -56,6 +56,9 @@ sealed class CaseResult
     public List<double> BuildSeconds { get; set; } = [];
     /// <summary>Peak memory of each timed clean build (see ProcessRunner.RunBuild).</summary>
     public List<long> BuildPeakBytes { get; set; } = [];
+    /// <summary>Compile benchmark: clean builds pinned to one logical CPU, running one job at a time.</summary>
+    public List<double> OneCpuBuildSeconds { get; set; } = [];
+    public List<long> OneCpuBuildPeakBytes { get; set; } = [];
     /// <summary>Compile benchmark: rebuilds after editing one source file, without cleaning.</summary>
     public List<double> RebuildSeconds { get; set; } = [];
     public List<long> RebuildPeakBytes { get; set; } = [];

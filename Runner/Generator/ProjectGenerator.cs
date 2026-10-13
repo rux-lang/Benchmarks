@@ -102,12 +102,17 @@ static class ProjectGenerator
             .Select(Path.GetFullPath);
     }
 
-    /// <summary>project.json: the app.json fields the runner reads, plus the source counts. A stored expected output is kept.</summary>
+    /// <summary>
+    /// project.json: the app.json fields the runner reads, plus the source counts. A stored expected
+    /// output is kept, unless the number of modules changed, since that changes the output.
+    /// </summary>
     static void WriteProjectJson(string dir, ProjectSpec project, Dictionary<string, SourceCount> counts)
     {
         string path = Path.Combine(dir, "project.json");
         string expected = "";
-        if (File.Exists(path) && JsonNode.Parse(File.ReadAllText(path))?["profiles"]?["standard"]?["expected"] is JsonNode stored)
+        if (File.Exists(path) && JsonNode.Parse(File.ReadAllText(path)) is JsonNode old
+            && old["modules"]?.GetValue<int>() == project.Modules.Count
+            && old["profiles"]?["standard"]?["expected"] is JsonNode stored)
             expected = stored.GetValue<string>();
         var node = new JsonObject
         {

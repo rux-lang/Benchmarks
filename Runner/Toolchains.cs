@@ -37,6 +37,12 @@ abstract class Toolchain(BenchConfig config)
     public virtual Command? Prepare(AppSpec app) => null;
     /// <summary>The steps of one release build; compile time is their total.</summary>
     public abstract IReadOnlyList<Command> Build(AppSpec app);
+    /// <summary>
+    /// The steps of a release build that runs one job at a time, for the compile benchmark's builds
+    /// pinned to one CPU. Usually the same as Build: most tools size their parallelism from the CPUs
+    /// the process may use, so the pin alone keeps them to one.
+    /// </summary>
+    public virtual IReadOnlyList<Command> SerialBuild(AppSpec app) => Build(app);
     /// <summary>The steps of a rebuild after a source file changed, without cleaning. Usually the same as Build.</summary>
     public virtual IReadOnlyList<Command> Rebuild(AppSpec app) => Build(app);
     public abstract string Executable(AppSpec app);
@@ -99,8 +105,13 @@ sealed class RustToolchain(BenchConfig config) : Toolchain(config)
 
     public override IEnumerable<string> CleanDirs(AppSpec app) => [Path.Combine(ProjectDir(app), "target")];
 
-    public override IReadOnlyList<Command> Build(AppSpec app) =>
-        [new(Config.Tool("cargo"), ["build", "--release", "--locked", "--offline", "--quiet"], ProjectDir(app))];
+    public override IReadOnlyList<Command> Build(AppSpec app) => Cargo(app, []);
+
+    /// <summary>One job, rather than relying on Cargo to read the CPU affinity; rustc's codegen threads share Cargo's jobs.</summary>
+    public override IReadOnlyList<Command> SerialBuild(AppSpec app) => Cargo(app, ["--jobs", "1"]);
+
+    IReadOnlyList<Command> Cargo(AppSpec app, IEnumerable<string> jobs) =>
+        [new(Config.Tool("cargo"), ["build", "--release", "--locked", "--offline", "--quiet", .. jobs], ProjectDir(app))];
 
     public override string Executable(AppSpec app) =>
         Path.Combine(ProjectDir(app), "target", "release", app.Name.ToLowerInvariant() + ExeSuffix);
@@ -174,6 +185,10 @@ sealed class CppToolchain(BenchConfig config) : Toolchain(config)
         Directory.CreateDirectory(Path.Combine(ProjectDir(app), "build"));
         return [new(Config.Tool("clang++"), [.. Flags(), "main.cpp", "-o", Path.Combine("build", app.Name + ExeSuffix)], ProjectDir(app))];
     }
+
+    /// <summary>One job, rather than relying on Ninja to read the CPU affinity.</summary>
+    public override IReadOnlyList<Command> SerialBuild(AppSpec app) =>
+        UsesCMake(app) ? [new(Config.Tool("cmake"), ["--build", "build", "--parallel", "1"], ProjectDir(app))] : Build(app);
 
     public override string Executable(AppSpec app) => Path.Combine(ProjectDir(app), "build", app.Name + ExeSuffix);
 }

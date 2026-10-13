@@ -145,7 +145,7 @@ sealed class ModuleSpec
 /// A generated project: Main, the shared helpers, and the modules, in source files, in groups.
 /// A file holds one module, or several in a large project (each in its own namespace), and Main
 /// calls one runner per group, which runs the group's modules in order (a Java method could not
-/// hold ten thousand calls). Committed projects are in the repository; the others are generated
+/// hold thousands of calls). Committed projects are in the repository; the others are generated
 /// on demand.
 /// </summary>
 sealed record ProjectSpec(string Name, string Description, IReadOnlyList<ModuleSpec> Modules, bool Committed, int? TimeoutSeconds)
@@ -181,14 +181,14 @@ sealed record ProjectSpec(string Name, string Description, IReadOnlyList<ModuleS
     }
 
     /// <summary>
-    /// Large, about a million lines per language, has a thousand files of ten modules each. It is
-    /// not committed: `generate` and `compile` write it when it is missing or out of date, and its
-    /// builds may take far longer than an app's.
+    /// Large, about a hundred thousand lines per language, has a hundred files of ten modules each.
+    /// It is not committed: `generate` and `compile` write it when it is missing or out of date, and
+    /// its builds may take far longer than an app's.
     /// </summary>
     public static readonly IReadOnlyList<ProjectSpec> All =
     [
         Create("Baseline", 1, modulesPerFile: 1, filesPerGroup: 1),
-        Create("Large", 10000, modulesPerFile: 10, filesPerGroup: 100, committed: false, timeoutSeconds: 4 * 3600),
+        Create("Large", 1000, modulesPerFile: 10, filesPerGroup: 10, committed: false, timeoutSeconds: 3600),
     ];
 
     public static ProjectSpec? Find(string name) => All.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));

@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Diagnostics;
+using System.Runtime.Versioning;
 
 namespace Runner;
 
@@ -171,6 +172,50 @@ static class ProcessRunner
         catch (Exception)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> with this process allowed on one logical CPU only. Child
+    /// processes inherit the affinity on Windows and Linux, so every process of a build started
+    /// meanwhile shares that CPU. The previous affinity is restored afterwards.
+    /// </summary>
+    public static void OnOneCpu(int cpu, Action action)
+    {
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
+        {
+            nint previous = Affinity;
+            Affinity = (nint)(1L << cpu);
+            try
+            {
+                action();
+            }
+            finally
+            {
+                Affinity = previous;
+            }
+            return;
+        }
+        throw new PlatformNotSupportedException("CPU affinity supports Windows and Linux");
+    }
+
+    /// <summary>The lowest logical CPU this process may run on.</summary>
+    public static int FirstAllowedCpu() =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsLinux() ? System.Numerics.BitOperations.TrailingZeroCount((ulong)Affinity) : 0;
+
+    /// <summary>The logical CPUs this process may run on, one bit each.</summary>
+    [SupportedOSPlatform("windows"), SupportedOSPlatform("linux")]
+    static nint Affinity
+    {
+        get
+        {
+            using var process = Process.GetCurrentProcess();
+            return process.ProcessorAffinity;
+        }
+        set
+        {
+            using var process = Process.GetCurrentProcess();
+            process.ProcessorAffinity = value;
         }
     }
 
