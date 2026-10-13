@@ -4,11 +4,12 @@ using System.Text.Json.Serialization;
 
 namespace Runner;
 
-/// <summary>bench.json: which languages and apps take part, default counts, compiler and packaging flags and tool names.</summary>
+/// <summary>bench.json: which languages, apps and projects take part, default counts, compiler and packaging flags and tool names.</summary>
 sealed record BenchConfig(
     string Baseline,
     List<string> Languages,
     List<string> Apps,
+    List<string> Projects,
     Defaults Defaults,
     List<string> CppFlags,
     List<string> JavacFlags,
@@ -21,11 +22,23 @@ sealed record BenchConfig(
 
 sealed record Defaults(string Profile, int BuildRuns, int Runs, int Warmups, int TimeoutSeconds);
 
-/// <summary>Apps/&lt;App&gt;/app.json: what the app does and how it is called.</summary>
+/// <summary>
+/// Apps/&lt;App&gt;/app.json: what the app does and how it is called. A generated project
+/// (Projects/&lt;Project&gt;/project.json) has the same fields, so the toolchains build both alike.
+/// </summary>
 sealed record AppSpec(string Name, string Description, string? OutputFile, Dictionary<string, ProfileSpec> Profiles)
 {
     [JsonIgnore] public string Directory { get; set; } = "";
+    /// <summary>The app.json or project.json the spec was read from, where expected outputs are stored.</summary>
+    [JsonIgnore] public string Manifest { get; set; } = "";
+    /// <summary>Generated projects only: source files and lines per language folder, as the generator counted them.</summary>
+    public Dictionary<string, SourceCount>? Sources { get; init; }
+    /// <summary>Seconds before a build step is stopped, when the bench.json default is too short for this project.</summary>
+    public int? TimeoutSeconds { get; init; }
 }
+
+/// <summary>Number of source files and non-blank source lines of one language's project.</summary>
+sealed record SourceCount(int Files, int Lines);
 
 sealed record ProfileSpec(List<string> Args, string Expected);
 
@@ -59,20 +72,24 @@ static class Config
         throw new InvalidOperationException("bench.json not found; run from inside the Benchmarks repository");
     }
 
-    public static AppSpec LoadApp(string root, string name)
+    public static AppSpec LoadApp(string root, string name) => Load(Path.Combine(root, "Apps", name), "app.json");
+
+    /// <summary>A generated project from Projects/&lt;Project&gt;/project.json.</summary>
+    public static AppSpec LoadProject(string root, string name) => Load(Path.Combine(root, "Projects", name), "project.json");
+
+    static AppSpec Load(string dir, string file)
     {
-        string dir = Path.Combine(root, "Apps", name);
-        var app = Json.Read<AppSpec>(Path.Combine(dir, "app.json"));
+        var app = Json.Read<AppSpec>(Path.Combine(dir, file));
         app.Directory = dir;
+        app.Manifest = Path.Combine(dir, file);
         return app;
     }
 
-    /// <summary>Writes an expected output into app.json, keeping the rest of the file as it is.</summary>
+    /// <summary>Writes an expected output into app.json or project.json, keeping the rest of the file as it is.</summary>
     public static void SaveExpected(AppSpec app, string profile, string expected)
     {
-        string path = Path.Combine(app.Directory, "app.json");
-        var node = JsonNode.Parse(File.ReadAllText(path))!;
+        var node = JsonNode.Parse(File.ReadAllText(app.Manifest))!;
         node["profiles"]![profile]!["expected"] = expected;
-        File.WriteAllText(path, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true, NewLine = "\n" }) + "\n");
+        File.WriteAllText(app.Manifest, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true, NewLine = "\n" }) + "\n");
     }
 }

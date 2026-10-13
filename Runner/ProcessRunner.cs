@@ -92,9 +92,59 @@ static class ProcessRunner
     /// </summary>
     public static (double Seconds, string Output) RunTool(Command command, int timeoutSeconds = 600)
     {
+        return Run(command, timeoutSeconds, job: null);
+    }
+
+    /// <summary>
+    /// Runs one build step and returns its wall time and peak memory. On Windows the peak is the
+    /// memory committed by all of the step's processes together (the build tool and every
+    /// compiler, linker or server it starts), from a job object. On Linux it is the peak resident
+    /// set size of the step's largest process, from wait4.
+    /// </summary>
+    public static (double Seconds, long PeakBytes) RunBuild(Command command, int timeoutSeconds)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            using var job = new Native.BuildJob();
+            double seconds = Run(command, timeoutSeconds, job).Seconds;
+            return (seconds, job.PeakBytes);
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            var environment = new Dictionary<string, string>(Environment);
+            foreach (var (key, value) in command.Environment ?? new Dictionary<string, string>())
+            {
+                if (value == "")
+                    environment.Remove(key);
+                else
+                    environment[key] = value;
+            }
+            var sample = Native.MeasureLinux(FindExecutable(command.File, environment), command.Arguments, command.WorkingDirectory, environment, timeoutSeconds);
+            if (sample.ExitCode != 0)
+                throw new InvalidOperationException($"{command} exited with {sample.ExitCode}\n{(sample.Stdout + sample.Stderr).Trim()}");
+            return (sample.WallMs / 1000, sample.PeakBytes);
+        }
+        return (RunTool(command, timeoutSeconds).Seconds, 0);
+    }
+
+    /// <summary>posix_spawn needs a path: a bare tool name is looked up on PATH.</summary>
+    static string FindExecutable(string file, IReadOnlyDictionary<string, string> environment)
+    {
+        if (file.Contains('/'))
+            return Path.GetFullPath(file);
+        foreach (string dir in environment.GetValueOrDefault("PATH", "").Split(':', StringSplitOptions.RemoveEmptyEntries))
+            if (File.Exists(Path.Combine(dir, file)))
+                return Path.Combine(dir, file);
+        return file;
+    }
+
+    static (double Seconds, string Output) Run(Command command, int timeoutSeconds, Native.BuildJob? job)
+    {
         var stopwatch = Stopwatch.StartNew();
         using var process = Process.Start(StartInfo(command))
             ?? throw new InvalidOperationException($"cannot start {command.File}");
+        if (job != null && OperatingSystem.IsWindows())
+            job.Add(process);
         process.StandardInput.Close();
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();

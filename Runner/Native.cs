@@ -69,6 +69,96 @@ static partial class Native
             PeakBytes: (long)counters.PeakWorkingSetSize);
     }
 
+    // ---------------------------------------------------------------- Windows job objects
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct ExtendedLimitInformation
+    {
+        // JOBOBJECT_BASIC_LIMIT_INFORMATION
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public nuint MinimumWorkingSetSize;
+        public nuint MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public nuint Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+        // IO_COUNTERS
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        public ulong ReadTransferCount, WriteTransferCount, OtherTransferCount;
+        public nuint ProcessMemoryLimit;
+        public nuint JobMemoryLimit;
+        public nuint PeakProcessMemoryUsed;
+        public nuint PeakJobMemoryUsed;
+    }
+
+    const int JobObjectExtendedLimitInformation = 9;
+    const uint JobObjectLimitKillOnJobClose = 0x2000;
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateJobObjectW", SetLastError = true)]
+    private static partial nint CreateJobObject(nint attributes, nint name);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AssignProcessToJobObject(nint job, SafeProcessHandle process);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetInformationJobObject(nint job, int infoClass, in ExtendedLimitInformation info, uint size);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool QueryInformationJobObject(nint job, int infoClass, out ExtendedLimitInformation info, uint size, nint returnLength);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint handle);
+
+    /// <summary>
+    /// A Windows job object holding a build: every process the build tool starts joins it, so the
+    /// kernel tracks their memory together. Closing the job ends any process still left in it
+    /// (such as a linker's PDB server).
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    public sealed class BuildJob : IDisposable
+    {
+        readonly nint handle;
+
+        public BuildJob()
+        {
+            handle = CreateJobObject(0, 0);
+            if (handle == 0)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject");
+            var limits = new ExtendedLimitInformation { LimitFlags = JobObjectLimitKillOnJobClose };
+            if (!SetInformationJobObject(handle, JobObjectExtendedLimitInformation, limits, (uint)Marshal.SizeOf<ExtendedLimitInformation>()))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject");
+        }
+
+        /// <summary>
+        /// Adds a process that was just started. Processes it starts from now on join the job
+        /// too; a build tool needs far longer to start its first child than this call takes.
+        /// </summary>
+        public void Add(Process process)
+        {
+            if (!AssignProcessToJobObject(handle, process.SafeHandle))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject");
+        }
+
+        /// <summary>The most memory committed by all processes of the job together at any moment.</summary>
+        public long PeakBytes
+        {
+            get
+            {
+                if (!QueryInformationJobObject(handle, JobObjectExtendedLimitInformation, out var info, (uint)Marshal.SizeOf<ExtendedLimitInformation>(), 0))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "QueryInformationJobObject");
+                return (long)info.PeakJobMemoryUsed;
+            }
+        }
+
+        public void Dispose() => CloseHandle(handle);
+    }
+
     // ---------------------------------------------------------------- Linux
 
     [StructLayout(LayoutKind.Sequential)]

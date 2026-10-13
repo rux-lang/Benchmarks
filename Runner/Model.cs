@@ -54,6 +54,14 @@ sealed class CaseResult
     public string Status { get; set; } = "ok";
     public string? Error { get; set; }
     public List<double> BuildSeconds { get; set; } = [];
+    /// <summary>Peak memory of each timed clean build (see ProcessRunner.RunBuild).</summary>
+    public List<long> BuildPeakBytes { get; set; } = [];
+    /// <summary>Compile benchmark: rebuilds after editing one source file, without cleaning.</summary>
+    public List<double> RebuildSeconds { get; set; } = [];
+    public List<long> RebuildPeakBytes { get; set; } = [];
+    /// <summary>Compile benchmark: the project's source files and non-blank lines in this language.</summary>
+    public int? SourceFiles { get; set; }
+    public int? SourceLines { get; set; }
     public long? ExecutableBytes { get; set; }
     public long? DeployableBytes { get; set; }
     /// <summary>Operating-system libraries the deployed native files load.</summary>
@@ -90,6 +98,8 @@ sealed record Metric(string Key, string Title, string Unit, string Description, 
             c => c.Runs.Select(r => r.PeakBytes / 1048576.0).ToList(), "0.0"),
         new("compile", "Compile time", "s", "Clean release build with the language's own build tool (median of builds).",
             c => c.BuildSeconds, "0.00"),
+        new("compileMemory", "Compile memory", "MiB", "Peak memory of the clean build: on Windows the memory committed by all build processes together, on Linux the peak resident set of the largest one (median of builds).",
+            c => c.BuildPeakBytes.Where(b => b > 0).Select(b => b / 1048576.0).ToList(), "0"),
         new("executable", "Executable size", "KiB", "Size of the program file.",
             c => c.ExecutableBytes is long b ? [b / 1024.0] : [], "0",
             "the program file needs its runtime to run; see Deployable size"),

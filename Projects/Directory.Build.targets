@@ -1,0 +1,4 @@
+<Project>
+  <!-- The generated C# projects use the same publish rules as the apps (static UCRT, minimal runtime). -->
+  <Import Project="..\Apps\Directory.Build.targets" />
+</Project>

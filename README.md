@@ -4,10 +4,12 @@ Ten small console applications, each written the same way in **Rux, C++, Go, Rus
 
 - **execution time** and **CPU time**
 - **peak memory**
-- **compile time** (clean release build)
+- **compile time** (clean release build) and **compile memory**
 - **executable size** and **deployable size**
 
 C# and Java are measured twice each: **C# AOT** (NativeAOT, one native executable) and **C# JIT** (self-contained and trimmed: the app ships with the part of the .NET runtime it uses, which JIT-compiles it), and **Java AOT** (GraalVM Native Image, one native executable) and **Java JIT** (a jar shipped with a minimal `jlink` runtime whose HotSpot JVM JIT-compiles it). That gives 10 apps × 8 configurations. Results are reported relative to Rux.
+
+A second, separate benchmark measures **compile time and compiler memory on a large project**: a generated program of about 1,000 files and 1,000,000 lines per language, built clean and rebuilt after a one-line edit. See [Compile benchmark](#compile-benchmark).
 
 ## Quick start
 
@@ -18,6 +20,7 @@ Windows 11 or Linux, x86-64. Install the toolchains (any recent version; the ver
 | `rux` on `PATH`             | Rux apps                                                                                 |
 | Rust (`cargo`, `rustc`)     | Rust apps                                                                                |
 | `clang++`                   | C++ apps (on Windows it uses the Visual Studio C++ libraries and linker)                 |
+| CMake and Ninja             | C++ projects of the compile benchmark only                                               |
 | Go (`go`)                   | Go apps                                                                                  |
 | .NET SDK 10                 | C# apps and the runner                                                                   |
 | JDK 25 or later (`java`)    | Java JIT apps; `javac`, `jar` and `jlink` are taken from the same JDK                    |
@@ -47,20 +50,22 @@ Each run writes a folder under `Results/<date>-<os>/`:
 | `samples.csv`  | Every individual measurement                                                  |
 | `results.json` | Everything above plus machine, toolchain versions and settings                |
 
-`dotnet run --project Runner -c Release -- report [folder]` rewrites the report files from a saved `results.json`. `dotnet run --project Runner -c Release -- clean` deletes the build output of every app (or of those picked with `--app` and `--lang`).
+`dotnet run --project Runner -c Release -- report [folder]` rewrites the report files from a saved `results.json`. `dotnet run --project Runner -c Release -- clean` deletes the build output of every app and project (or of those picked with `--app`, `--project` and `--lang`).
 
 ## Layout
 
 ```
-bench.json                    languages, apps, default counts, C++/javac/native-image/jlink flags, tool names
+bench.json                    languages, apps, projects, default counts, C++/javac/native-image/jlink flags, tool names
+.cargo/config.toml            shared Rust settings for every Rust project in the repository
 Apps/<App>/app.json           description, arguments per profile, expected output
 Apps/<App>/Rux/               Rux.toml, Src/Main.rux, Src/Arguments.rux
-Apps/<App>/Rust/              Cargo.toml, Cargo.lock, src/main.rs   (shared settings: Apps/.cargo/config.toml)
+Apps/<App>/Rust/              Cargo.toml, Cargo.lock, src/main.rs
 Apps/<App>/Cpp/               main.cpp
 Apps/<App>/Go/                go.mod, main.go
 Apps/<App>/CSharp/            <App>.csproj, Program.cs   (shared settings: Apps/Directory.Build.props and .targets)
 Apps/<App>/Java/              Main.java
-Runner/                       the C# measurement tool
+Projects/<Project>/           the compile benchmark's generated projects, one folder per language (see below)
+Runner/                       the C# measurement tool (Runner/Generator/ writes Projects/)
 Results/                      output, not committed
 ```
 
@@ -98,7 +103,7 @@ native-image -march=compatibility -cp build/classes -o build/<App> Main   # in A
 - Floating-point results are printed as raw IEEE-754 bit patterns, so all languages must agree bit for bit. C++ is compiled with `-ffp-contract=off` so no fused multiply-adds change results.
 - Outputs never depend on hash-map iteration order: WordCount ranks by count, then by word.
 - BinaryTrees allocates the way each language normally does: `new`/`delete` in C++, `Box` in Rust, the garbage collector in Go, C# and Java, and `Allocator::Pool` (the small-object allocator) in Rux.
-- Every configuration is self-contained: its deployable files are everything it needs on a machine with only the operating system installed, so deployable sizes compare like for like. Native executables carry their own C and C++ runtime and load only operating-system libraries, as Rux does. On Windows that excludes the Universal CRT (`api-ms-win-crt-*`, `ucrtbase`), `vcruntime`, `msvcp` and `msvcrt`; on Linux only glibc and `libgcc_s` may stay dynamic. Rust uses `+crt-static` (`Apps/.cargo/config.toml`), C++ `-fms-runtime-lib=static` on Windows and `-static-libstdc++ -static-libgcc` on Linux, C# AOT links the static UCRT (`Apps/Directory.Build.targets`), and Native Image links the static CRT on Windows and uses `--static-nolibc` on Linux. Go and Rux need nothing.
+- Every configuration is self-contained: its deployable files are everything it needs on a machine with only the operating system installed, so deployable sizes compare like for like. Native executables carry their own C and C++ runtime and load only operating-system libraries, as Rux does. On Windows that excludes the Universal CRT (`api-ms-win-crt-*`, `ucrtbase`), `vcruntime`, `msvcp` and `msvcrt`; on Linux only glibc and `libgcc_s` may stay dynamic. Rust uses `+crt-static` (`.cargo/config.toml`), C++ `-fms-runtime-lib=static` on Windows and `-static-libstdc++ -static-libgcc` on Linux, C# AOT links the static UCRT (`Apps/Directory.Build.targets`), and Native Image links the static CRT on Windows and uses `--static-nolibc` on Linux. Go and Rux need nothing.
 - C# JIT and Java JIT ship the smallest runtime their own tools produce. C# JIT is published with `SelfContained` and `PublishTrimmed`, without the runtime's optional debugger, dump, alternative-GC and QUIC files, and with Microsoft's app-local Universal CRT from the Windows SDK (the .NET runtime DLLs load the CRT as DLLs). Java JIT ships a `jlink` image of `java.base` (all the apps need) with `--strip-debug --no-header-files --no-man-pages`, plus the default class-data-sharing archive (`java -Xshare:dump`) that the JDK uses for fast start-up; the JDK already ships its C runtime DLLs.
 - All builds target baseline x86-64 (`-march=x86-64`, Rust's default target CPU, `GOAMD64=v1`, `IlcInstructionSet=x86-64`, `-march=compatibility` for Native Image, Rux's default). Native Image would otherwise default to x86-64-v3.
 - Java has no unsigned integers, so the Java apps use `long` with `>>>`, `Long.remainderUnsigned` and `Long.compareUnsigned` where the others use unsigned 64-bit math.
@@ -125,6 +130,53 @@ Reports show the median. Execution time includes process start-up, which is what
 **Ratios.** "Relative to Rux" divides each value by Rux's value for the same app. Every metric is lower-is-better, so below 1.00× beats Rux. Summaries use the geometric mean over apps, which treats "2× faster" and "2× slower" symmetrically.
 
 For stable numbers: plug in a laptop, close other programs, and consider excluding the repository from antivirus real-time scanning (it scans every freshly built executable).
+
+## Compile benchmark
+
+The apps are one file each, so their compile time is mostly fixed cost: starting the build tool, the standard library, linking. Rux also compiles its standard library from source on every build (about 40,000 lines), while the other languages link a precompiled one. The compile benchmark measures what happens on a real-sized project instead, and it is a separate command with its own report because it takes longer and measures something else:
+
+```bash
+dotnet run --project Runner -c Release -- compile                       # Baseline and Large, all languages
+dotnet run --project Runner -c Release -- compile --build-runs 1        # one build of each kind
+dotnet run --project Runner -c Release -- compile --lang Rux,Cpp,Go     # a subset
+```
+
+Results go to `Results/<date>-compile-<os>/` with the same files as above. A million lines take minutes to compile in most languages, so `compile` takes hours; use `--build-runs 1` and `--lang` to keep runs short. Each build step may run for up to four hours (`timeoutSeconds` in `Projects/Large/project.json`, or `--timeout`).
+
+**The projects.** `Projects/` holds two generated projects in every language:
+
+| Project    | Contents                                                                                          | Per language                   |
+| ---------- | ------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `Baseline` | Main, the shared helpers and one module, with the same build setup and dependencies               | 4–6 files, ~130 lines          |
+| `Large`    | 10,000 modules in 1,000 files of 10 (each module in its own namespace), in 10 groups of 100 files | ~1,000 files, ~1,000,000 lines |
+
+`Baseline` is committed. `Large` (about 35 MB of source per language) is not: `compile` and `generate` write it when it is missing or out of date, which takes a few seconds. `compile` always builds `Baseline` too, since `Large` is measured against it.
+
+A module is the unit of work, and module *N* is the same code in both projects. Each module is one of ten kinds, taking turns, so every group has one of each: a struct with methods (3D vectors), an enum state machine, an interface with three implementations called through dynamic dispatch, hash-map counting, insertion sort and binary search, a ring buffer, a table-driven CRC, decimal text formatting and parsing, small matrix products, and union-find. Each also has two or three generated arithmetic functions, and public `Mix` and `Run` functions. Each module calls `Mix` of up to three of the twenty modules before it. Every group has a runner that runs its modules in order, and Main calls the runners and prints one FNV-1a hash, which must be the same in every language. All arithmetic is unsigned 64-bit and wraps.
+
+Every language uses its usual project layout:
+
+| Language | Layout                                                                                        | Build                                                           |
+| -------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Rux      | one package; `Src/GroupN/PartNNNN.rux`, a `pub module GroupN::NameNNN` per module             | `rux build --release`                                           |
+| Rust     | one crate; `src/groupN/mod.rs`, and `partNNNN.rs` with an inline `mod` per module             | `cargo build --release`                                         |
+| C++      | `src/groupN/partNNNN.h` and `.cpp`, a namespace `groupN::namennn` per module, `CMakeLists.txt` | CMake configures Ninja once (untimed); Ninja builds in parallel |
+| Go       | one module, a package per group; a module's names start with its own name                     | `go build`                                                      |
+| C#       | one project, a namespace per group, a static class per module                                 | `dotnet publish` (AOT and JIT, as for the apps)                 |
+| Java     | `src/groupN/PartNNNN.java`, a package per group, a nested class per module                    | `javac` of every file, then `native-image` or `jar` + `jlink`   |
+
+The sources are generated by `Runner/Generator/` from one seeded specification. After changing the generator, run `dotnet run --project Runner -c Release -- generate`; it rewrites only the files that change and prints the file and line counts. `compile` and `doctor` refuse to run when the committed `Baseline` differs from what the generator writes. When a change alters the program's output, clear `expected` in `Projects/*/project.json` and run `compile --update-expected`.
+
+**What is measured**, per project and language, with the same clean-build procedure as the apps (untimed preparation and warm-up build, then `--build-runs` timed clean builds):
+
+- **Clean build** of `Large` and of `Baseline`.
+- **Large − Baseline**: the time spent on the project's own code, without the fixed cost. For Rux, most of the fixed cost is the standard library.
+- **Compile speed**: the extra lines of `Large` over `Baseline` per second of Large − Baseline.
+- **Peak memory** of every timed build. On Windows each build step runs in a job object, and the peak is the memory committed by all of its processes together at their highest point: the build tool and every compiler, linker or server it starts, so Ninja's parallel compilers add up. On Linux it is the peak resident set of the step's largest process (from `wait4`), so the figures are not comparable across operating systems. For a build of several steps (Java), it is the step that used the most. The app suite reports the same measure as *compile memory*.
+- **Rebuild after a one-line edit**: the line marked `bench:edit` in the last module (a leaf: only Main calls it) gets a new number, and the project builds again without cleaning, `--build-runs` times. The file is then restored and rebuilt. This shows what each build tool does incrementally: Ninja recompiles one translation unit and links, Go recompiles one package and links, release Cargo builds and C# recompile the whole crate or project, javac recompiles every file, and Java JIT keeps its `jlink` runtime.
+- Executable and deployable size, as for the apps.
+
+Each program also runs once, and its output must match `expected` in `project.json`; otherwise the case is marked `FAIL`.
 
 ## Rux notes
 

@@ -1,0 +1,38 @@
+{
+  "name": "Baseline",
+  "description": "The smallest project with the same layout, dependencies and build setup as the others: Main, the shared helpers and one module.",
+  "modules": 1,
+  "files": 1,
+  "profiles": {
+    "standard": {
+      "args": [],
+      "expected": "ccab150cdb2d0626"
+    }
+  },
+  "sources": {
+    "Rux": {
+      "files": 4,
+      "lines": 128
+    },
+    "Rust": {
+      "files": 4,
+      "lines": 133
+    },
+    "Cpp": {
+      "files": 6,
+      "lines": 155
+    },
+    "Go": {
+      "files": 4,
+      "lines": 134
+    },
+    "CSharp": {
+      "files": 4,
+      "lines": 124
+    },
+    "Java": {
+      "files": 5,
+      "lines": 138
+    }
+  }
+}

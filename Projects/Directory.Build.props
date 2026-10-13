@@ -1,0 +1,4 @@
+<Project>
+  <!-- The generated C# projects use the same settings as the apps. -->
+  <Import Project="..\Apps\Directory.Build.props" />
+</Project>

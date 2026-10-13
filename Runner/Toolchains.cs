@@ -37,6 +37,8 @@ abstract class Toolchain(BenchConfig config)
     public virtual Command? Prepare(AppSpec app) => null;
     /// <summary>The steps of one release build; compile time is their total.</summary>
     public abstract IReadOnlyList<Command> Build(AppSpec app);
+    /// <summary>The steps of a rebuild after a source file changed, without cleaning. Usually the same as Build.</summary>
+    public virtual IReadOnlyList<Command> Rebuild(AppSpec app) => Build(app);
     public abstract string Executable(AppSpec app);
     /// <summary>The file holding the compiled app, whose size is the executable size. Usually the executable itself.</summary>
     public virtual string ProgramFile(AppSpec app) => Executable(app);
@@ -104,26 +106,73 @@ sealed class RustToolchain(BenchConfig config) : Toolchain(config)
         Path.Combine(ProjectDir(app), "target", "release", app.Name.ToLowerInvariant() + ExeSuffix);
 }
 
+/// <summary>
+/// The apps are one main.cpp compiled by one clang++ command. A generated project has a
+/// CMakeLists.txt and many translation units, and builds the way real C++ projects do: CMake
+/// configures a Ninja build once (untimed, like a package restore), and Ninja compiles the
+/// translation units in parallel and links them.
+/// </summary>
 sealed class CppToolchain(BenchConfig config) : Toolchain(config)
 {
     public override string Name => "Cpp";
     public override string Display => "C++";
     public override string Folder => "Cpp";
-    public override IEnumerable<(string, Command)> VersionCommands => [("C++", new(Config.Tool("clang++"), ["--version"], "."))];
+    public override IEnumerable<(string, Command)> VersionCommands =>
+    [
+        ("C++", new(Config.Tool("clang++"), ["--version"], ".")),
+        ("CMake", new(Config.Tool("cmake"), ["--version"], ".")),
+        ("Ninja", new(Config.Tool("ninja"), ["--version"], ".")),
+    ];
+
+    bool UsesCMake(AppSpec app) => File.Exists(Path.Combine(ProjectDir(app), "CMakeLists.txt"));
 
     public override IEnumerable<string> CleanDirs(AppSpec app) => [Path.Combine(ProjectDir(app), "build")];
 
+    /// <summary>Compiler flags from bench.json, plus linking the C and C++ runtimes into the executable.</summary>
+    List<string> Flags()
+    {
+        var flags = new List<string>(Config.CppFlags);
+        if (IsWindows)
+            flags.Add("-fms-runtime-lib=static");
+        else
+            flags.AddRange(["-s", "-static-libstdc++", "-static-libgcc"]);
+        return flags;
+    }
+
+    public override Command? Prepare(AppSpec app)
+    {
+        if (!UsesCMake(app))
+            return null;
+        // CMake adds no flags of its own for the build type, links the static runtime on Windows
+        // (it would otherwise pass the DLL runtime to clang), and finds Ninja by its configured path.
+        return new(Config.Tool("cmake"),
+        [
+            "-S", ".", "-B", "build", "-G", "Ninja", "--fresh",
+            $"-DCMAKE_MAKE_PROGRAM={Config.Tool("ninja")}",
+            $"-DCMAKE_CXX_COMPILER={Config.Tool("clang++")}",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CXX_FLAGS_RELEASE=",
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
+            "-DCMAKE_CXX_FLAGS=" + string.Join(' ', Flags().Where(f => f != "-s" && !f.StartsWith("-static"))),
+            "-DCMAKE_EXE_LINKER_FLAGS=" + string.Join(' ', Flags().Where(f => f == "-s" || f.StartsWith("-static"))),
+        ], ProjectDir(app));
+    }
+
+    /// <summary>A generated project keeps its configured build folder and removes only what Ninja built.</summary>
+    public override void Clean(AppSpec app)
+    {
+        if (UsesCMake(app) && File.Exists(Path.Combine(ProjectDir(app), "build", "build.ninja")))
+            ProcessRunner.RunTool(new(Config.Tool("cmake"), ["--build", "build", "--target", "clean"], ProjectDir(app)));
+        else
+            base.Clean(app);
+    }
+
     public override IReadOnlyList<Command> Build(AppSpec app)
     {
+        if (UsesCMake(app))
+            return [new(Config.Tool("cmake"), ["--build", "build"], ProjectDir(app))];
         Directory.CreateDirectory(Path.Combine(ProjectDir(app), "build"));
-        var args = new List<string>(Config.CppFlags);
-        // Link the C and C++ runtimes into the executable (clang's default for MSVC targets, made explicit).
-        if (IsWindows)
-            args.Add("-fms-runtime-lib=static");
-        else
-            args.AddRange(["-s", "-static-libstdc++", "-static-libgcc"]);
-        args.AddRange(["main.cpp", "-o", Path.Combine("build", app.Name + ExeSuffix)]);
-        return [new(Config.Tool("clang++"), args, ProjectDir(app))];
+        return [new(Config.Tool("clang++"), [.. Flags(), "main.cpp", "-o", Path.Combine("build", app.Name + ExeSuffix)], ProjectDir(app))];
     }
 
     public override string Executable(AppSpec app) => Path.Combine(ProjectDir(app), "build", app.Name + ExeSuffix);
@@ -278,9 +327,25 @@ sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
 
     public override IEnumerable<string> CleanDirs(AppSpec app) => [Output(app)];
 
+    /// <summary>
+    /// The apps are one Main.java. A generated project has every source under src/, listed in an
+    /// argument file, since a large project's paths would not fit on a Windows command line.
+    /// </summary>
+    IEnumerable<string> Sources(AppSpec app)
+    {
+        string src = Path.Combine(ProjectDir(app), "src");
+        if (!Directory.Exists(src))
+            return ["Main.java"];
+        var files = Directory.GetFiles(src, "*.java", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(ProjectDir(app), f).Replace('\\', '/')).Order(StringComparer.Ordinal);
+        Directory.CreateDirectory(Output(app));
+        File.WriteAllLines(Path.Combine(Output(app), "sources.txt"), files);
+        return ["@" + Path.Combine("build", Variant, "sources.txt").Replace('\\', '/')];
+    }
+
     public override IReadOnlyList<Command> Build(AppSpec app)
     {
-        var javac = new Command(JdkTool("javac"), [.. Config.JavacFlags, "-d", Classes(app), "Main.java"], ProjectDir(app));
+        var javac = new Command(JdkTool("javac"), [.. Config.JavacFlags, "-d", Classes(app), .. Sources(app)], ProjectDir(app));
         if (aot)
             return [javac, new Command(NativeImage,
                 [.. Config.NativeImageFlags, .. StaticRuntimeFlags, "-cp", Classes(app), "-o", Path.Combine("build", Variant, app.Name), "Main"],
@@ -294,6 +359,12 @@ sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
         var cds = new Command(RuntimeJava(app), ["-Xshare:dump"], ProjectDir(app));
         return [javac, jar, jlink, cds];
     }
+
+    /// <summary>
+    /// JIT: javac and jar again. The jlink runtime and its class-data-sharing archive do not depend
+    /// on the app, so a rebuild keeps them (jlink also refuses to write over an existing runtime).
+    /// </summary>
+    public override IReadOnlyList<Command> Rebuild(AppSpec app) => aot || !Directory.Exists(Runtime(app)) ? Build(app) : Build(app).Take(2).ToList();
 
     /// <summary>
     /// Link the C runtime into the executable. On Linux, --static-nolibc links everything but glibc

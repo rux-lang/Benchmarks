@@ -2,6 +2,7 @@
   "baseline": "Rux",
   "languages": ["Rux", "Rust", "Cpp", "Go", "CSharpAot", "CSharpJit", "JavaAot", "JavaJit"],
   "apps": ["Sha512", "Mandelbrot", "WordCount", "BinaryTrees", "Sort", "NBody", "MatrixMultiply", "PrimeSieve", "Fannkuch", "Base64"],
+  "projects": ["Baseline", "Large"],
   "defaults": {
     "profile": "standard",
     "buildRuns": 3,
@@ -18,6 +19,8 @@
     "cargo": "cargo",
     "rustc": "rustc",
     "clang++": "clang++",
+    "cmake": "cmake",
+    "ninja": "ninja",
     "dotnet": "dotnet",
     "go": "go",
     "java": "java",

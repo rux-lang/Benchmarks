@@ -14,17 +14,19 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
         try
         {
             if (toolchain.Prepare(app) is Command prepare)
-                ProcessRunner.RunTool(prepare, timeout);
+                ProcessRunner.RunTool(prepare, Timeout(app));
             toolchain.Clean(app);
             BuildOnce(toolchain, app);
             for (int i = 0; i < options.BuildRuns; i++)
             {
                 toolchain.Clean(app);
-                result.BuildSeconds.Add(BuildOnce(toolchain, app));
+                var (seconds, peak) = BuildOnce(toolchain, app);
+                result.BuildSeconds.Add(seconds);
+                result.BuildPeakBytes.Add(peak);
             }
             result.ExecutableBytes = new FileInfo(toolchain.ProgramFile(app)).Length;
             result.DeployableBytes = toolchain.DeployFiles(app).Sum(f => new FileInfo(f).Length);
-            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} build {string.Join("  ", result.BuildSeconds.Select(s => $"{s,6:0.00} s"))}   exe {result.ExecutableBytes / 1024,6:0} KiB");
+            Console.WriteLine($"  {app.Name,-15}{toolchain.Display,-9} build {string.Join("  ", result.BuildSeconds.Select(s => $"{s,6:0.00} s"))}   mem {result.BuildPeakBytes.Max() / 1048576.0,6:0} MiB   exe {result.ExecutableBytes / 1024,6:0} KiB");
             CheckLibraries(app, toolchain, result);
         }
         catch (Exception e)
@@ -34,9 +36,25 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
         }
     }
 
-    /// <summary>Runs every build step and returns their total wall time in seconds.</summary>
-    double BuildOnce(Toolchain toolchain, AppSpec app) =>
-        toolchain.Build(app).Sum(step => ProcessRunner.RunTool(step, timeout).Seconds);
+    /// <summary>Runs every build step and returns their total wall time in seconds and their peak memory.</summary>
+    (double Seconds, long PeakBytes) BuildOnce(Toolchain toolchain, AppSpec app) => RunSteps(toolchain.Build(app), Timeout(app));
+
+    /// <summary>Runs build steps one after another: their total wall time, and the peak memory of the step that used the most.</summary>
+    public static (double Seconds, long PeakBytes) RunSteps(IEnumerable<Command> steps, int timeoutSeconds)
+    {
+        double seconds = 0;
+        long peak = 0;
+        foreach (var step in steps)
+        {
+            var (s, p) = ProcessRunner.RunBuild(step, timeoutSeconds);
+            seconds += s;
+            peak = Math.Max(peak, p);
+        }
+        return (seconds, peak);
+    }
+
+    /// <summary>--timeout, else the project's own limit (a large project builds for longer), else bench.json.</summary>
+    public int Timeout(AppSpec app) => options.TimeoutSeconds ?? app.TimeoutSeconds ?? config.Defaults.TimeoutSeconds;
 
     /// <summary>Builds once, untimed, when the program is missing (for `run` without `build`).</summary>
     bool EnsureBuilt(AppSpec app, Toolchain toolchain, CaseResult result)
@@ -46,7 +64,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
             try
             {
                 if (toolchain.Prepare(app) is Command prepare)
-                    ProcessRunner.RunTool(prepare, timeout);
+                    ProcessRunner.RunTool(prepare, Timeout(app));
                 toolchain.Clean(app);
                 BuildOnce(toolchain, app);
             }
@@ -65,7 +83,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
     /// the deployable size counts everything the program needs. Records the operating-system
     /// libraries it loads and fails the case on anything else.
     /// </summary>
-    static bool CheckLibraries(AppSpec app, Toolchain toolchain, CaseResult result)
+    public static bool CheckLibraries(AppSpec app, Toolchain toolchain, CaseResult result)
     {
         var files = toolchain.DeployFiles(app).ToList();
         var shipped = files.Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -138,7 +156,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
     }
 
     /// <summary>Returns the normalized output, or throws when the run is not correct.</summary>
-    static string Validate(AppSpec app, ProfileSpec profile, RunSample sample, string workDir)
+    public static string Validate(AppSpec app, ProfileSpec profile, RunSample sample, string workDir)
     {
         string output = Normalize(sample.Stdout);
         if (sample.ExitCode != 0)
@@ -162,7 +180,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
     /// When app.json has no expected output yet, all languages must agree with each other (and
     /// with an independent .NET reference where one exists). --update-expected stores the result.
     /// </summary>
-    void CheckAgreement(AppSpec app, ProfileSpec profile, List<CaseResult> cases)
+    public void CheckAgreement(AppSpec app, ProfileSpec profile, List<CaseResult> cases)
     {
         var ok = cases.Where(c => c.Ok && c.Output != null).ToList();
         if (profile.Expected.Length > 0 || ok.Count == 0)
@@ -188,7 +206,7 @@ sealed class Suite(BenchConfig config, Options options, Results results, string 
 
     public static string Normalize(string text) => text.Replace("\r\n", "\n").TrimEnd();
 
-    static string FirstLine(string text) => text.Trim().Split('\n')[0].Trim();
+    public static string FirstLine(string text) => text.Trim().Split('\n')[0].Trim();
 
     public static ulong Fnv1a(ReadOnlySpan<byte> bytes)
     {

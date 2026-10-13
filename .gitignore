@@ -9,6 +9,19 @@ Apps/**/obj/
 Apps/**/*.ppm
 Apps/.gocache-std/
 
+# Build outputs of the generated projects
+Projects/**/Bin/
+Projects/**/Temp/
+Projects/**/target/
+Projects/**/build/
+Projects/**/.artifacts/
+Projects/**/bin/
+Projects/**/obj/
+Projects/.gocache-std/
+
+# The million-line project is generated on demand (by generate or compile)
+Projects/Large/
+
 # Runner build output
 Runner/bin/
 Runner/obj/

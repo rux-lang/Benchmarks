@@ -61,8 +61,8 @@ static class Report
 
     static string ColumnTitle(Toolchain toolchain, Metric metric) => toolchain.Display + (Ranked(metric, toolchain) ? "" : Dagger);
 
-    static string Number(double value, string format) => value.ToString(format, Invariant);
-    static string Times(double ratio) => ratio >= 10 ? $"{ratio.ToString("0", Invariant)}×" : $"{ratio.ToString("0.00", Invariant)}×";
+    public static string Number(double value, string format) => value.ToString(format, Invariant);
+    public static string Times(double ratio) => ratio >= 10 ? $"{ratio.ToString("0", Invariant)}×" : $"{ratio.ToString("0.00", Invariant)}×";
 
     public static void Write(Results results, IReadOnlyList<Toolchain> toolchains, string dir)
     {
@@ -169,7 +169,8 @@ static class Report
         return table.ToString().TrimEnd();
     }
 
-    static string Header(Results results, bool md)
+    /// <summary>Machine, toolchains, settings and date; <paramref name="settings"/> replaces the line about profile and counts.</summary>
+    public static string Header(Results results, bool md, string? settings = null)
     {
         var m = results.Machine;
         var s = results.Settings;
@@ -177,7 +178,7 @@ static class Report
         {
             $"Machine: {m.Cpu}, {m.LogicalCores} logical cores, {m.MemoryBytes / 1073741824.0:0} GiB, {m.Os}",
             "Toolchains: " + string.Join(" · ", m.Toolchains.Select(t => $"{t.Key}: {ShortVersion(t.Value)}")),
-            $"Profile: {results.Profile} · {s.BuildRuns} timed clean builds · {s.Warmups} warm-up + {s.Runs} measured runs" + (s.Cpu is int cpu ? $" · pinned to CPU {cpu}" : ""),
+            settings ?? $"Profile: {results.Profile} · {s.BuildRuns} timed clean builds · {s.Warmups} warm-up + {s.Runs} measured runs" + (s.Cpu is int cpu ? $" · pinned to CPU {cpu}" : ""),
             $"Date: {results.StartedAt:yyyy-MM-dd HH:mm}" + (m.Commit != null ? $" · commit {m.Commit}" : ""),
         };
         return md ? string.Join("  \n", lines) : string.Join("<br>", lines.Select(WebUtility.HtmlEncode));
@@ -220,71 +221,7 @@ static class Report
         var languages = toolchains.Where(t => results.Settings.Languages.Contains(t.Name)).ToList();
         var baseline = toolchains.First(t => t.Name == results.Settings.Baseline);
         var html = new StringBuilder();
-        html.Append($$"""
-            <!doctype html>
-            <html lang="en">
-            <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Benchmark Report</title>
-            <style>
-            :root {
-              color-scheme: light;
-              --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
-              --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
-              --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4; --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
-            }
-            @media (prefers-color-scheme: dark) {
-              :root:not([data-theme="light"]) {
-                color-scheme: dark;
-                --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-                --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-                --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
-              }
-            }
-            :root[data-theme="dark"] {
-              color-scheme: dark;
-              --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-              --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-              --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
-            }
-            * { box-sizing: border-box; }
-            body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-            main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
-            h1 { font-size: 28px; margin: 0 0 8px; }
-            h2 { font-size: 20px; margin: 40px 0 4px; }
-            p, .meta { color: var(--ink-2); margin: 4px 0 12px; }
-            .meta { font-size: 13px; }
-            .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin: 12px 0; overflow-x: auto; }
-            table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 14px; }
-            th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
-            th:first-child, td:first-child { text-align: left; }
-            th { color: var(--ink-2); font-weight: 600; }
-            td.best { font-weight: 700; }
-            td.fail { color: var(--muted); }
-            td.hosted { color: var(--ink-2); font-style: italic; }
-            tr.mean td { color: var(--ink-2); font-style: italic; }
-            .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
-            .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--c); vertical-align: -1px; }
-            svg { display: block; width: 100%; height: auto; }
-            svg text { fill: var(--muted); font-size: 12px; }
-            svg text.app { fill: var(--ink-2); font-size: 13px; }
-            svg .grid { stroke: var(--grid); }
-            svg .row { stroke: var(--grid); stroke-dasharray: 2 4; }
-            svg circle { stroke: var(--surface); stroke-width: 2; }
-            svg circle.hosted { fill: var(--surface); stroke: var(--c); }
-            svg circle:hover { stroke: var(--ink); }
-            details summary { cursor: pointer; color: var(--ink-2); font-size: 14px; margin-top: 8px; }
-            #tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
-                   border-radius: 8px; padding: 6px 10px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: none; }
-            ul { color: var(--ink-2); padding-left: 20px; }
-            </style>
-            </head>
-            <body>
-            <main>
-            <h1>Benchmark report</h1>
-            <div class="meta">{{Header(results, md: false)}}</div>
-            """);
+        html.Append(HtmlStart("Benchmark report", Header(results, md: false)));
 
         string legend = "<div class=\"legend\">" + string.Concat(languages.Select((t, i) =>
             $"<span style=\"--c: var({SeriesVars[i % SeriesVars.Length]})\">{WebUtility.HtmlEncode(t.Display)}</span>")) + "</div>";
@@ -316,26 +253,97 @@ static class Report
             html.Append("<h2>Failures</h2><ul>" + string.Concat(failures.Select(c =>
                 $"<li><strong>{c.App} / {c.Language}</strong>: {WebUtility.HtmlEncode(c.Error?.Split('\n')[0] ?? "")}</li>")) + "</ul>");
         html.Append("<h2>Notes</h2><ul>" + string.Concat(Notes(toolchains).Select(n => $"<li>{WebUtility.HtmlEncode(n)}</li>")) + "</ul>");
-        html.Append("""
-            </main>
-            <div id="tip"></div>
-            <script>
-            const tip = document.getElementById("tip");
-            document.querySelectorAll("circle[data-tip]").forEach(dot => {
-              dot.addEventListener("mousemove", e => {
-                tip.textContent = dot.dataset.tip;
-                tip.style.display = "block";
-                tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px";
-                tip.style.top = (e.clientY + 14) + "px";
-              });
-              dot.addEventListener("mouseleave", () => tip.style.display = "none");
-            });
-            </script>
-            </body>
-            </html>
-            """);
+        html.Append(HtmlEnd);
         return html.ToString();
     }
+
+    /// <summary>The page up to and including the header block: styles, title and machine details.</summary>
+    public static string HtmlStart(string title, string header) => $$"""
+        <!doctype html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>{{WebUtility.HtmlEncode(title)}}</title>
+        <style>
+        :root {
+          color-scheme: light;
+          --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+          --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+          --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4; --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root:not([data-theme="light"]) {
+            color-scheme: dark;
+            --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+            --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+            --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+          }
+        }
+        :root[data-theme="dark"] {
+          color-scheme: dark;
+          --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+          --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+          --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+        main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+        h1 { font-size: 28px; margin: 0 0 8px; }
+        h2 { font-size: 20px; margin: 40px 0 4px; }
+        p, .meta { color: var(--ink-2); margin: 4px 0 12px; }
+        .meta { font-size: 13px; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin: 12px 0; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 14px; }
+        th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+        th:first-child, td:first-child { text-align: left; }
+        th { color: var(--ink-2); font-weight: 600; }
+        td.best { font-weight: 700; }
+        td.fail { color: var(--muted); }
+        td.hosted { color: var(--ink-2); font-style: italic; }
+        tr.mean td { color: var(--ink-2); font-style: italic; }
+        .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
+        .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--c); vertical-align: -1px; }
+        svg { display: block; width: 100%; height: auto; }
+        svg text { fill: var(--muted); font-size: 12px; }
+        svg text.app { fill: var(--ink-2); font-size: 13px; }
+        svg text.value { fill: var(--ink-2); }
+        svg .grid { stroke: var(--grid); }
+        svg .row { stroke: var(--grid); stroke-dasharray: 2 4; }
+        svg circle { stroke: var(--surface); stroke-width: 2; }
+        svg circle.hosted { fill: var(--surface); stroke: var(--c); }
+        svg circle:hover { stroke: var(--ink); }
+        details summary { cursor: pointer; color: var(--ink-2); font-size: 14px; margin-top: 8px; }
+        #tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+               border-radius: 8px; padding: 6px 10px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: none; }
+        ul { color: var(--ink-2); padding-left: 20px; }
+        </style>
+        </head>
+        <body>
+        <main>
+        <h1>{{WebUtility.HtmlEncode(title)}}</h1>
+        <div class="meta">{{header}}</div>
+        """;
+
+    /// <summary>The end of the page, with the script that shows chart tooltips.</summary>
+    public const string HtmlEnd = """
+        </main>
+        <div id="tip"></div>
+        <script>
+        const tip = document.getElementById("tip");
+        document.querySelectorAll("[data-tip]").forEach(dot => {
+          dot.addEventListener("mousemove", e => {
+            tip.textContent = dot.dataset.tip;
+            tip.style.display = "block";
+            tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px";
+            tip.style.top = (e.clientY + 14) + "px";
+          });
+          dot.addEventListener("mouseleave", () => tip.style.display = "none");
+        });
+        </script>
+        </body>
+        </html>
+        """;
 
     static string HtmlTable(Results results, List<Toolchain> languages, Metric metric)
     {

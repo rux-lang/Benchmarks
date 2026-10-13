@@ -10,16 +10,20 @@ const string Usage = """
       build             Measure compile time and program size
       run               Measure execution time, CPU time and peak memory
       all               build + run, then write the report (the usual choice)
+      compile           Compile benchmark: clean builds and one-line-edit rebuilds of the generated projects, then its report
       report [dir]      Rewrite the report files of a results folder (default: the latest)
-      clean             Delete the build output of the apps (honours --app and --lang)
+      generate          Rewrite the generated projects under Projects/ from the generator
+      clean             Delete the build output of the apps and projects (honours --app, --project and --lang)
 
     Options:
       --app A,B         Only these apps                 (default: all in bench.json)
+      --project A,B     Only these projects (compile, generate, clean): Baseline, Large
+                        (default: those in bench.json; Baseline is always compiled, as the others are measured against it)
       --lang X,Y        Only these languages            (Rux, Rust, Cpp, Go, CSharpAot, CSharpJit, JavaAot, JavaJit)
       --profile NAME    small | standard                (default: standard)
       --runs N          Measured runs per program       (default: bench.json)
       --warmups N       Unmeasured runs before those    (default: bench.json)
-      --build-runs N    Timed clean builds per program  (default: bench.json)
+      --build-runs N    Timed clean builds per program, and rebuilds for compile (default: bench.json)
       --cpu K           Pin the measured programs to logical CPU K
       --timeout S       Seconds before a build or run is stopped
       --update-expected Store agreed outputs in app.json when none are stored yet
@@ -53,6 +57,12 @@ catch (ArgumentException e)
 }
 var toolchains = Toolchain.All(config).Where(t => options.Languages.Contains(t.Name)).ToList();
 var apps = options.Apps.Select(a => Config.LoadApp(root, a)).ToList();
+var projectSpecs = options.Projects.Select(p => Runner.Generator.ProjectSpec.Find(p)!).ToList();
+// Projects that are not committed (Large) exist only once generated.
+List<AppSpec> LoadProjects() => projectSpecs
+    .Where(p => File.Exists(Path.Combine(root, "Projects", p.Name, "project.json")))
+    .Select(p => Config.LoadProject(root, p.Name)).ToList();
+var projects = LoadProjects();
 
 switch (options.Command)
 {
@@ -60,12 +70,20 @@ switch (options.Command)
         return Doctor();
     case "build" or "run" or "all":
         return Measure();
+    case "compile":
+        return Compile();
     case "report":
         string dir = options.ReportDir ?? LatestResults()
-            ?? throw new InvalidOperationException("no results yet; run `all` first");
+            ?? throw new InvalidOperationException("no results yet; run `all` or `compile` first");
         var saved = Json.Read<Results>(Path.Combine(dir, "results.json"));
-        Report.Write(saved, Toolchain.All(config), dir);
+        if (saved.Command == "compile")
+            CompileReport.Write(saved, Toolchain.All(config), dir);
+        else
+            Report.Write(saved, Toolchain.All(config), dir);
         Console.WriteLine($"Report written to {Path.Combine(dir, "report.md")}");
+        return 0;
+    case "generate":
+        Runner.Generator.ProjectGenerator.Write(root, projectSpecs);
         return 0;
     case "clean":
         return Clean();
@@ -74,10 +92,11 @@ switch (options.Command)
         return 2;
 }
 
-int Measure()
+/// <summary>A new Results/&lt;date&gt;[-compile]-&lt;os&gt; folder and the results it will hold.</summary>
+(string Dir, Results Results) NewResults(List<string> names, string suffix = "")
 {
     string resultsDir = Path.Combine(root, "Results",
-        $"{DateTime.Now:yyyyMMdd-HHmmss}-{(OperatingSystem.IsWindows() ? "windows" : "linux")}");
+        $"{DateTime.Now:yyyyMMdd-HHmmss}{suffix}-{(OperatingSystem.IsWindows() ? "windows" : "linux")}");
     Directory.CreateDirectory(resultsDir);
     var results = new Results
     {
@@ -88,7 +107,7 @@ int Measure()
         Settings = new Settings
         {
             Baseline = config.Baseline,
-            Apps = options.Apps,
+            Apps = names,
             Languages = options.Languages,
             BuildRuns = options.BuildRuns,
             Runs = options.Runs,
@@ -96,6 +115,12 @@ int Measure()
             Cpu = options.Cpu,
         },
     };
+    return (resultsDir, results);
+}
+
+int Measure()
+{
+    var (resultsDir, results) = NewResults(options.Apps);
     var suite = new Suite(config, options, results, resultsDir);
     void Save() => Json.Write(Path.Combine(resultsDir, "results.json"), results);
 
@@ -128,6 +153,49 @@ int Measure()
     Report.Write(results, Toolchain.All(config), resultsDir);
     Console.WriteLine();
     Console.WriteLine(Report.ConsoleSummary(results, Toolchain.All(config)));
+    Console.WriteLine($"Results: {resultsDir}");
+    Console.WriteLine($"Report:  {Path.Combine(resultsDir, "report.html")}");
+    return results.Cases.All(c => c.Ok) ? 0 : 1;
+}
+
+int Compile()
+{
+    // Every other project is measured against Baseline, so it is always part of the run.
+    if (!projectSpecs.Any(p => p.Name == "Baseline"))
+        projectSpecs.Insert(0, Runner.Generator.ProjectSpec.Find("Baseline")!);
+    var committed = projectSpecs.Where(p => p.Committed).ToList();
+    if (Runner.Generator.ProjectGenerator.Stale(root, committed) is { Count: > 0 } stale)
+    {
+        Console.Error.WriteLine($"The generated projects differ from the generator ({stale[0]}{(stale.Count > 1 ? $" and {stale.Count - 1} more" : "")}): run `generate` first.");
+        return 1;
+    }
+    var generated = projectSpecs.Where(p => !p.Committed).ToList();
+    if (generated.Count > 0)
+    {
+        Console.WriteLine($"Generating {string.Join(", ", generated.Select(p => p.Name))} (not committed; files that are already up to date are kept)");
+        Runner.Generator.ProjectGenerator.Write(root, generated);
+    }
+    projects = LoadProjects();
+    var (resultsDir, results) = NewResults(projects.Select(p => p.Name).ToList(), "-compile");
+    results.Settings.Runs = 0;
+    results.Settings.Warmups = 0;
+    var suite = new CompileSuite(config, options, results, resultsDir);
+    void Save() => Json.Write(Path.Combine(resultsDir, "results.json"), results);
+
+    Console.WriteLine($"Compiling ({options.BuildRuns} timed clean build{(options.BuildRuns == 1 ? "" : "s")} and as many rebuilds after a one-line edit, per project and language)");
+    foreach (var project in projects)
+    {
+        suite.Measure(project, toolchains);
+        Save();
+    }
+
+    results.FinishedAt = DateTimeOffset.Now;
+    Save();
+    if (Directory.Exists(Path.Combine(resultsDir, "work")))
+        Directory.Delete(Path.Combine(resultsDir, "work"), recursive: true);
+    CompileReport.Write(results, Toolchain.All(config), resultsDir);
+    Console.WriteLine();
+    Console.WriteLine(CompileReport.ConsoleSummary(results, Toolchain.All(config)));
     Console.WriteLine($"Results: {resultsDir}");
     Console.WriteLine($"Report:  {Path.Combine(resultsDir, "report.html")}");
     return results.Cases.All(c => c.Ok) ? 0 : 1;
@@ -166,6 +234,13 @@ int Doctor()
     Console.WriteLine(copies == 1 ? "Arguments.rux is identical in every Rux app" : "Arguments.rux differs between apps: keep the copies identical");
     ok &= copies == 1;
 
+    // The projects under Projects/ are generated; they must match what the generator writes now.
+    var stale = Runner.Generator.ProjectGenerator.Stale(root, Runner.Generator.ProjectSpec.All.Where(p => p.Committed));
+    Console.WriteLine(stale.Count == 0
+        ? "Generated projects match the generator"
+        : $"Generated projects are out of date ({stale[0]}{(stale.Count > 1 ? $" and {stale.Count - 1} more" : "")}): run `generate`");
+    ok &= stale.Count == 0;
+
     if (ProcessRunner.RemovedVariables.Count > 0)
         Console.WriteLine($"Removed from child processes: {string.Join(", ", ProcessRunner.RemovedVariables)}");
     return ok ? 0 : 1;
@@ -173,14 +248,22 @@ int Doctor()
 
 int Clean()
 {
-    var dirs = (from app in apps
+    // --app alone cleans only those apps and --project alone only those projects.
+    bool appsOnly = options.AppsGiven && !options.ProjectsGiven;
+    bool projectsOnly = options.ProjectsGiven && !options.AppsGiven;
+    var targets = (projectsOnly ? [] : apps).Concat(appsOnly ? [] : projects).ToList();
+    var dirs = (from app in targets
                 from toolchain in toolchains
                 from dir in toolchain.OutputDirs(app)
                 select (Dir: dir, Project: toolchain.ProjectDir(app))).ToList();
-    // The Go standard-library snapshot is shared by all apps, so only a full clean removes it.
-    string appsDir = Path.Combine(root, "Apps");
-    if (toolchains.Any(t => t is GoToolchain) && apps.Count == config.Apps.Count)
-        dirs.Add((Path.Combine(appsDir, ".gocache-std"), appsDir));
+    // The Go standard-library snapshot is shared by all apps (or projects), so only a full clean removes it.
+    if (toolchains.Any(t => t is GoToolchain))
+    {
+        if (!projectsOnly && apps.Count == config.Apps.Count)
+            dirs.Add((Path.Combine(root, "Apps", ".gocache-std"), Path.Combine(root, "Apps")));
+        if (!appsOnly && projects.Count == config.Projects.Count)
+            dirs.Add((Path.Combine(root, "Projects", ".gocache-std"), Path.Combine(root, "Projects")));
+    }
 
     int removed = 0;
     foreach (var (dir, project) in dirs.Where(d => Directory.Exists(d.Dir)))
@@ -267,6 +350,9 @@ sealed class Options
     public string Command { get; private set; } = "";
     public string? ReportDir { get; private set; }
     public List<string> Apps { get; private set; } = [];
+    public List<string> Projects { get; private set; } = [];
+    public bool AppsGiven { get; private set; }
+    public bool ProjectsGiven { get; private set; }
     public List<string> Languages { get; private set; } = [];
     public string Profile { get; private set; } = "";
     public int Runs { get; private set; } = -1;
@@ -287,7 +373,8 @@ sealed class Options
             int Number() => int.TryParse(Value(), out int n) && n >= 0 ? n : throw new ArgumentException($"{args[i - 1]} needs a number");
             switch (args[i])
             {
-                case "--app": options.Apps = [.. Value().Split(',', StringSplitOptions.RemoveEmptyEntries)]; break;
+                case "--app": options.Apps = [.. Value().Split(',', StringSplitOptions.RemoveEmptyEntries)]; options.AppsGiven = true; break;
+                case "--project": options.Projects = [.. Value().Split(',', StringSplitOptions.RemoveEmptyEntries)]; options.ProjectsGiven = true; break;
                 case "--lang": options.Languages = [.. Value().Split(',', StringSplitOptions.RemoveEmptyEntries)]; break;
                 case "--profile": options.Profile = Value(); break;
                 case "--runs": options.Runs = Number(); break;
@@ -310,6 +397,7 @@ sealed class Options
     public void ApplyDefaults(BenchConfig config)
     {
         if (Apps.Count == 0) Apps = config.Apps;
+        if (Projects.Count == 0) Projects = config.Projects;
         if (Languages.Count == 0) Languages = config.Languages;
         if (Profile == "") Profile = config.Defaults.Profile;
         if (Runs < 0) Runs = config.Defaults.Runs;
@@ -317,6 +405,10 @@ sealed class Options
         if (BuildRuns < 0) BuildRuns = config.Defaults.BuildRuns;
         foreach (string app in Apps.Where(a => !config.Apps.Contains(a)))
             throw new ArgumentException($"unknown app {app}; known: {string.Join(", ", config.Apps)}");
+        var known = Runner.Generator.ProjectSpec.All.Select(p => p.Name).ToList();
+        foreach (string project in Projects.Where(p => Runner.Generator.ProjectSpec.Find(p) == null))
+            throw new ArgumentException($"unknown project {project}; known: {string.Join(", ", known)}");
+        Projects = Projects.Select(p => Runner.Generator.ProjectSpec.Find(p)!.Name).ToList();
         foreach (string language in Languages.Where(l => !config.Languages.Contains(l)))
             throw new ArgumentException($"unknown language {language}; known: {string.Join(", ", config.Languages)}");
     }
