@@ -172,7 +172,7 @@ static partial class Native
     }
 
     const int OpenReadOnly = 0, OpenWriteOnly = 1, OpenCreate = 0x40, OpenTruncate = 0x200;
-    const int EINTR = 4, SIGKILL = 9;
+    const int EINTR = 4, SIGKILL = 9, CloseOnExec = 0x80000, PR_SET_CHILD_SUBREAPER = 36;
 
     [LibraryImport("libc", SetLastError = true)]
     private static partial int posix_spawn_file_actions_init(nint actions);
@@ -188,6 +188,18 @@ static partial class Native
     private static partial int wait4(int pid, out int status, int options, out ResourceUsage usage);
     [LibraryImport("libc", SetLastError = true)]
     private static partial int kill(int pid, int signal);
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int posix_spawn_file_actions_adddup2(nint actions, int fd, int newFd);
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int pipe2(int[] fds, int flags);
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial nint read(int fd, byte[] buffer, nint count);
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial nint write(int fd, byte[] buffer, nint count);
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int close(int fd);
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int prctl(int option, nuint arg2, nuint arg3, nuint arg4, nuint arg5);
 
     static nint[] ToCStrings(IEnumerable<string> values)
     {
@@ -204,39 +216,59 @@ static partial class Native
     }
 
     /// <summary>
-    /// Starts the program with posix_spawn and collects it with wait4, which returns the child's
-    /// CPU times and peak resident set size. .NET's Process class reaps its own children only, so
-    /// it never collects this one.
+    /// Starts the program and collects it with wait4, which returns its CPU times and peak resident
+    /// set size. A process's peak includes the peak of the memory it ran in before its exec, and
+    /// posix_spawn (like fork) starts the child in the runner's memory, so a program the runner
+    /// started itself would report at least the runner's own peak. A small /bin/sh starts it instead
+    /// and exits; the runner, a child subreaper, adopts the program and collects it. The program
+    /// waits on a pipe until the runner releases it, and the clock starts then. .NET's Process class
+    /// reaps its own children only, so it never collects these.
     /// </summary>
     [SupportedOSPlatform("linux")]
     public static RunSample MeasureLinux(string executable, IReadOnlyList<string> arguments, string workingDirectory,
         IReadOnlyDictionary<string, string> environment, int timeoutSeconds)
     {
+        CheckErrno(prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0), "prctl");
         string stdoutPath = Path.GetTempFileName();
         string stderrPath = Path.GetTempFileName();
         nint actions = Marshal.AllocHGlobal(256);
-        nint[] argv = ToCStrings([executable, .. arguments]);
+        // The shell runs the program in the background with "$@", which waits for a line on fd 3, and
+        // writes its process id to fd 4. A shell sets PWD (to the working directory), and bash sets
+        // SHLVL; the program gets them only when the runner passes them.
+        string unset = string.Concat(new[] { "PWD", "SHLVL" }.Where(v => !environment.ContainsKey(v)).Select(v => $"unset {v}; "));
+        string script = "{ read -r _ <&3 || exit 1; " + unset + "exec \"$@\" 3<&- 4>&-; } & echo $! >&4";
+        nint[] argv = ToCStrings(["sh", "-c", script, "sh", executable, .. arguments]);
         nint[] envp = ToCStrings(environment.Select(e => $"{e.Key}={e.Value}"));
+        int[] go = [-1, -1], id = [-1, -1];
         try
         {
+            CheckErrno(pipe2(go, CloseOnExec), "pipe2");
+            CheckErrno(pipe2(id, CloseOnExec), "pipe2");
             Check(posix_spawn_file_actions_init(actions), "posix_spawn_file_actions_init");
             Check(posix_spawn_file_actions_addopen(actions, 0, "/dev/null", OpenReadOnly, 0), "addopen stdin");
             Check(posix_spawn_file_actions_addopen(actions, 1, stdoutPath, OpenWriteOnly | OpenCreate | OpenTruncate, 0x180), "addopen stdout");
             Check(posix_spawn_file_actions_addopen(actions, 2, stderrPath, OpenWriteOnly | OpenCreate | OpenTruncate, 0x180), "addopen stderr");
+            Check(posix_spawn_file_actions_adddup2(actions, go[0], 3), "adddup2 fd 3");
+            Check(posix_spawn_file_actions_adddup2(actions, id[1], 4), "adddup2 fd 4");
             Check(posix_spawn_file_actions_addchdir_np(actions, workingDirectory), "addchdir");
 
+            Check(posix_spawn(out int shell, "/bin/sh", actions, 0, argv, envp), "posix_spawn");
+            CloseFd(ref go[0]);
+            CloseFd(ref id[1]);
+            string line = ReadLine(id[0]);
+            CloseFd(ref id[0]);
+            Wait(shell);
+            if (!int.TryParse(line, out int pid))
+                throw new InvalidOperationException($"/bin/sh did not start {executable}\n{File.ReadAllText(stderrPath).Trim()}");
+
             var stopwatch = Stopwatch.StartNew();
-            Check(posix_spawn(out int pid, executable, actions, 0, argv, envp), "posix_spawn");
+            if (write(go[1], "\n"u8.ToArray(), 1) != 1)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "write");
+            CloseFd(ref go[1]);
             var waiter = Task.Run(() =>
             {
-                while (true)
-                {
-                    int result = wait4(pid, out int status, 0, out ResourceUsage usage);
-                    if (result == pid)
-                        return (status, usage, stopwatch.Elapsed.TotalMilliseconds);
-                    if (Marshal.GetLastPInvokeError() != EINTR)
-                        throw new Win32Exception(Marshal.GetLastPInvokeError(), "wait4");
-                }
+                var (status, usage) = Wait(pid);
+                return (status, usage, stopwatch.Elapsed.TotalMilliseconds);
             });
             if (!waiter.Wait(TimeSpan.FromSeconds(timeoutSeconds)))
             {
@@ -254,6 +286,9 @@ static partial class Native
         }
         finally
         {
+            foreach (int[] pipe in (int[][])[go, id])
+                for (int i = 0; i < 2; i++)
+                    CloseFd(ref pipe[i]);
             posix_spawn_file_actions_destroy(actions);
             Marshal.FreeHGlobal(actions);
             FreeCStrings(argv);
@@ -263,10 +298,52 @@ static partial class Native
         }
     }
 
+    /// <summary>Waits for a child (or an adopted orphan) to exit and collects it.</summary>
+    static (int Status, ResourceUsage Usage) Wait(int pid)
+    {
+        while (true)
+        {
+            if (wait4(pid, out int status, 0, out ResourceUsage usage) == pid)
+                return (status, usage);
+            if (Marshal.GetLastPInvokeError() != EINTR)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "wait4");
+        }
+    }
+
+    /// <summary>Reads up to the first newline or the end of the pipe.</summary>
+    static string ReadLine(int fd)
+    {
+        var bytes = new List<byte>();
+        var buffer = new byte[1];
+        while (true)
+        {
+            nint count = read(fd, buffer, 1);
+            if (count < 0 && Marshal.GetLastPInvokeError() == EINTR)
+                continue;
+            if (count <= 0 || buffer[0] == '\n')
+                return System.Text.Encoding.ASCII.GetString([.. bytes]);
+            bytes.Add(buffer[0]);
+        }
+    }
+
+    static void CloseFd(ref int fd)
+    {
+        if (fd >= 0)
+            close(fd);
+        fd = -1;
+    }
+
     static void Check(int result, string what)
     {
         // posix_spawn functions return the error number instead of setting errno.
         if (result != 0)
             throw new Win32Exception(result, what);
+    }
+
+    /// <summary>For calls that return -1 and set errno.</summary>
+    static void CheckErrno(int result, string what)
+    {
+        if (result == -1)
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), what);
     }
 }

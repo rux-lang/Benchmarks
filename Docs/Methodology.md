@@ -25,7 +25,7 @@ Every program first runs `--warmups` times unmeasured (1 by default), then `--ru
 
 - wall-clock time from process creation to exit,
 - user and kernel CPU time,
-- peak memory: the peak working set on Windows (`GetProcessTimes`, `GetProcessMemoryInfo`), the maximum resident set size on Linux (`posix_spawn` + `wait4`).
+- peak memory: the peak working set on Windows (`GetProcessTimes`, `GetProcessMemoryInfo`), the maximum resident set size on Linux (`posix_spawn` + `wait4`). On Linux a process's maximum resident set includes the peak of the memory it ran in before its `exec`, and `posix_spawn` starts a child in the runner's memory, so the runner does not start the program itself: a small `/bin/sh` starts it and exits, and the runner (a child subreaper) adopts it and collects it with `wait4`. The clock starts when the runner releases the waiting program, after the shell is gone.
 
 Reports show the median. Execution time includes process start-up, which is what a user of a console application sees; for C# JIT and Java JIT that includes starting the runtime and JIT-compiling. Java JIT is started as `java -jar` with the `java` of its own jlink runtime, so the measured process is the JVM itself.
 
