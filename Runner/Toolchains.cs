@@ -207,7 +207,9 @@ sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
     public override string Display => aot ? "C# AOT" : "C# JIT";
     public override bool RuntimeHosted => !aot;
     public override string Folder => "CSharp";
-    public override IEnumerable<(string, Command)> VersionCommands => [(".NET SDK", new(Config.Tool("dotnet"), ["--version"], "."))];
+    public override IEnumerable<(string, Command)> VersionCommands => aot || IsWindows
+        ? [(".NET SDK", new(Config.Tool("dotnet"), ["--version"], "."))]
+        : [(".NET SDK", new(Config.Tool("dotnet"), ["--version"], ".")), ("patchelf", new(Config.Tool("patchelf"), ["--version"], "."))];
     public override string? Note => aot ? null
         : "C# JIT is published self-contained and trimmed: its executable size is the app's IL assembly (not the apphost that starts it), its deployable size includes the .NET runtime it ships.";
 
@@ -215,8 +217,10 @@ sealed class CSharpToolchain(BenchConfig config, bool aot) : Toolchain(config)
     string Project(AppSpec app) => app.Name + ".csproj";
     string PublishDir(AppSpec app) => Path.Combine(Artifacts(app), "publish", app.Name, "release_" + Rid);
 
+    /// <summary>On Linux, JIT also needs patchelf (Apps/Directory.Build.targets gives the apphost a RUNPATH).</summary>
     IEnumerable<string> CommonArgs(AppSpec app) =>
         [Project(app), "-r", Rid, $"-p:PublishAot={(aot ? "true" : "false")}", "-p:SelfContained=true", "-p:PublishTrimmed=true",
+         .. aot || IsWindows ? Array.Empty<string>() : [$"-p:PatchElf={Config.Tool("patchelf")}"],
          "--artifacts-path", Artifacts(app), "-nologo", "-v", "q"];
 
     public override IEnumerable<string> CleanDirs(AppSpec app)

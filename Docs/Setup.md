@@ -14,6 +14,7 @@ Windows 11 or Linux, x86-64. Install the toolchains below (any recent version; t
 | .NET SDK 10                 | C# apps and the runner                                                                   |
 | JDK 25 or later (`java`)    | Java JIT apps; `javac`, `jar` and `jlink` are taken from the same JDK                    |
 | GraalVM with `native-image` | Java AOT apps (`native-image` on `PATH`, in `$GRAALVM_HOME/bin`, or set in `bench.json`) |
+| `patchelf` (Linux only)     | C# JIT apps: makes the .NET apphost load the `libstdc++.so.6` published beside it        |
 
 On Windows, NativeAOT and Native Image also need Visual Studio with the "Desktop development with C++" workload.
 

@@ -24,6 +24,7 @@
     "dotnet": "dotnet",
     "go": "go",
     "java": "java",
-    "native-image": "native-image"
+    "native-image": "native-image",
+    "patchelf": "patchelf"
   }
 }

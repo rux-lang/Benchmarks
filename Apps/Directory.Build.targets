@@ -39,16 +39,46 @@
   </Target>
 
   <!--
+    The Linux build of the self-contained JIT runtime (the apphost, hostfxr, hostpolicy, coreclr,
+    clrjit) links libstdc++ dynamically. Publish the system's libstdc++.so.6 next to it, as on
+    Windows with the Universal CRT, and give the apphost a RUNPATH of $ORIGIN so the loader takes
+    that copy: the runtime libraries the apphost loads later then share it.
+  -->
+  <Target Name="PublishAppLocalLibstdcxx" BeforeTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(PublishAot)' != 'true' and '$(SelfContained)' == 'true' and $(RuntimeIdentifier.StartsWith('linux'))">
+    <PropertyGroup>
+      <_Libstdcxx Condition="'$(_Libstdcxx)' == '' and Exists('/usr/lib/x86_64-linux-gnu/libstdc++.so.6')">/usr/lib/x86_64-linux-gnu/libstdc++.so.6</_Libstdcxx>
+      <_Libstdcxx Condition="'$(_Libstdcxx)' == '' and Exists('/usr/lib64/libstdc++.so.6')">/usr/lib64/libstdc++.so.6</_Libstdcxx>
+    </PropertyGroup>
+    <Error Condition="'$(_Libstdcxx)' == ''"
+           Text="libstdc++.so.6 was not found in /usr/lib/x86_64-linux-gnu or /usr/lib64." />
+    <!-- Copy follows the symbolic link, so the published file is the library itself. -->
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(_Libstdcxx)" RelativePath="libstdc++.so.6" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="SetApphostRunpath" AfterTargets="Publish"
+          Condition="'$(PublishAot)' != 'true' and '$(SelfContained)' == 'true' and $(RuntimeIdentifier.StartsWith('linux'))">
+    <PropertyGroup>
+      <PatchElf Condition="'$(PatchElf)' == ''">patchelf</PatchElf>
+    </PropertyGroup>
+    <Exec Command="&quot;$(PatchElf)&quot; --set-rpath '$ORIGIN' &quot;$(PublishDir)$(AssemblyName)&quot;" />
+  </Target>
+
+  <!--
     A trimmed self-contained publish still copies the runtime's optional native parts: debugger and
     dump support (mscordaccore, mscordbi, createdump, DiaSymReader), the standalone alternative GCs
-    (clrgc, clrgcexp) and QUIC (msquic). The program runs without them, and jlink leaves the Java
-    counterparts out, so the minimal deployment leaves them out too.
+    (clrgc, clrgcexp), QUIC (msquic) and, on Linux, the LTTng tracing provider (coreclrtraceptprovider,
+    which needs liblttng-ust; the runtime starts without it when it is missing). The program runs
+    without them, and jlink leaves the Java counterparts out, so the minimal deployment leaves them
+    out too.
   -->
   <Target Name="RemoveOptionalRuntimeFiles" AfterTargets="ComputeResolvedFilesToPublishList"
           Condition="'$(PublishAot)' != 'true' and '$(SelfContained)' == 'true'">
     <ItemGroup>
       <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
-          Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Filename)', '^(lib)?(mscordaccore.*|mscordbi|createdump|Microsoft\.DiaSymReader\.Native\..*|clrgc|clrgcexp|msquic)$'))" />
+          Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Filename)', '^(lib)?(mscordaccore.*|mscordbi|createdump|Microsoft\.DiaSymReader\.Native\..*|clrgc|clrgcexp|msquic|coreclrtraceptprovider)$'))" />
     </ItemGroup>
   </Target>
 </Project>
