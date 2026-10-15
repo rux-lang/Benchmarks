@@ -2,10 +2,11 @@ namespace Runner;
 
 /// <summary>
 /// A command line: program, arguments, working directory and variables set on top of the cleaned
-/// environment (an empty value removes the variable).
+/// environment (an empty value removes the variable). A build step that is file work rather than a
+/// tool sets InProcess: the runner calls it instead of starting File, which then only names the step.
 /// </summary>
 sealed record Command(string File, IReadOnlyList<string> Arguments, string WorkingDirectory,
-    IReadOnlyDictionary<string, string>? Environment = null)
+    IReadOnlyDictionary<string, string>? Environment = null, Action? InProcess = null)
 {
     public override string ToString() =>
         string.Join(' ', new[] { File }.Concat(Arguments).Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
@@ -336,7 +337,9 @@ sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
 
     public override IEnumerable<(string, Command)> VersionCommands => aot
         ? [("JDK", new(JdkTool("java"), ["-version"], ".")), ("GraalVM", new(NativeImage, ["--version"], "."))]
-        : [("JDK", new(JdkTool("java"), ["-version"], "."))];
+        : IsWindows
+            ? [("JDK", new(JdkTool("java"), ["-version"], "."))]
+            : [("JDK", new(JdkTool("java"), ["-version"], ".")), ("patchelf", new(Config.Tool("patchelf"), ["--version"], "."))];
 
     string Output(AppSpec app) => Path.Combine(ProjectDir(app), "build", Variant);
     string Classes(AppSpec app) => Path.Combine("build", Variant, "classes");
@@ -376,8 +379,40 @@ sealed class JavaToolchain(BenchConfig config, bool aot) : Toolchain(config)
         // The class-data-sharing archive the JDK ships for fast start-up, for the JVM's default settings
         // only (jlink's --generate-cds-archive writes four, one per heap layout, and the JVM maps one).
         var cds = new Command(RuntimeJava(app), ["-Xshare:dump"], ProjectDir(app));
-        return [javac, jar, jlink, cds];
+        if (IsWindows)
+            return [javac, jar, jlink, cds];
+        var ship = new Command("ship-libraries", [Runtime(app)], ProjectDir(app), InProcess: () => ShipLibraries(app));
+        return [javac, jar, jlink, ship, cds];
     }
+
+    /// <summary>
+    /// Copies into the runtime image the libraries its files load that are neither operating-system
+    /// libraries nor part of the image, as C# JIT ships libstdc++. A JDK built the upstream way needs
+    /// none; a distribution's JDK (Ubuntu's OpenJDK) links libstdc++ dynamically and uses the
+    /// system's zlib. The copies go in lib/, where the image's libraries look first (their RUNPATH is
+    /// $ORIGIN); lib/server/libjvm.so has no RUNPATH, so patchelf gives it $ORIGIN/.. .
+    /// </summary>
+    void ShipLibraries(AppSpec app)
+    {
+        string lib = Path.Combine(Runtime(app), "lib");
+        var files = Directory.GetFiles(Runtime(app), "*", SearchOption.AllDirectories);
+        var shipped = files.Select(Path.GetFileName).ToHashSet();
+        var missing = files.SelectMany(f => NativeImports.Read(f) ?? [])
+            .Where(l => !shipped.Contains(l) && !NativeImports.IsSystem(l)).Distinct().ToList();
+        if (missing.Count == 0)
+            return;
+        foreach (string library in missing)
+        {
+            string source = LinuxLibraryDirs.Select(d => Path.Combine(d, library)).FirstOrDefault(File.Exists)
+                ?? throw new InvalidOperationException($"{library} was not found in {string.Join(" or ", LinuxLibraryDirs)}");
+            // File.Copy follows the symbolic link, so the copy is the library itself.
+            File.Copy(source, Path.Combine(lib, library));
+        }
+        ProcessRunner.RunTool(new Command(Config.Tool("patchelf"),
+            ["--set-rpath", "$ORIGIN/..", Path.Combine(lib, "server", "libjvm.so")], ProjectDir(app)));
+    }
+
+    static readonly string[] LinuxLibraryDirs = ["/usr/lib/x86_64-linux-gnu", "/usr/lib64"];
 
     /// <summary>
     /// JIT: javac and jar again. The jlink runtime and its class-data-sharing archive do not depend

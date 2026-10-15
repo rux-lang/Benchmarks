@@ -104,6 +104,8 @@ static class ProcessRunner
     /// </summary>
     public static (double Seconds, long PeakBytes) RunBuild(Command command, int timeoutSeconds)
     {
+        if (command.InProcess != null)
+            return (RunTool(command, timeoutSeconds).Seconds, 0);
         if (OperatingSystem.IsWindows())
         {
             using var job = new Native.BuildJob();
@@ -142,6 +144,11 @@ static class ProcessRunner
     static (double Seconds, string Output) Run(Command command, int timeoutSeconds, Native.BuildJob? job)
     {
         var stopwatch = Stopwatch.StartNew();
+        if (command.InProcess != null)
+        {
+            command.InProcess();
+            return (stopwatch.Elapsed.TotalSeconds, "");
+        }
         using var process = Process.Start(StartInfo(command))
             ?? throw new InvalidOperationException($"cannot start {command.File}");
         if (job != null && OperatingSystem.IsWindows())
